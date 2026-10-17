@@ -1,31 +1,21 @@
 # Lịch sử thay đổi / Changelog
 
-## v0.2.0
+## v1.0.0: bản phát hành đầu tiên / first release
 
 **Tiếng Việt**
-- Mọi switch kéo thả được, khung sắp xếp phủ toàn bộ sơ đồ.
-- Cột thiết bị của mọi switch ghim được bằng cách kéo tiêu đề; bấm đúp để bỏ ghim.
-- Cột switch lõi mở/đóng độc lập với các switch khác.
-- Đường flow đi vào cổng từ cạnh bên, không cắt ngang các khối khác.
-- Node gọn hơn: dòng 2 chỉ hiện IP; model, số cổng, ping, CPU/RAM chuyển vào tooltip.
-- Thêm `node_opacity` để đường flow không lộ xuyên qua chữ.
-- Sửa tên cổng cho các switch mà entity cổng chỉ có sensor throughput (ví dụ TP-Link SG2210P).
-- Thêm `isp.ip` và `pfsense.ip` để hiện IP WAN/IP thiết bị ở dòng 2.
-- Thêm ô Speedtest ở header (`speedtest.down` / `up` / `ping`).
-- Tự động xoay ghi thống nhất là *switch* thay vì *AP*.
+- Sơ đồ cây ISP → pfSense → switch lõi → switch → cổng có thiết bị, vẽ ngang hoặc dọc, đường flow chuyển động theo băng thông thật.
+- Kéo thả mọi node (kể cả switch), ghim cột thiết bị bằng cách kéo tiêu đề (bấm đúp để bỏ ghim), cột switch lõi mở/đóng độc lập, đường flow vào cổng từ cạnh bên, bố cục lưu theo người dùng HA.
+- Giao diện Glass/Neon, `node_opacity`, zoom, toàn màn hình, tìm kiếm cổng, ô Speedtest ở header.
+- Cổng thông minh: tự đặt tên từ mô tả cổng, `port_names`, ẩn switch/cổng, `isp.ip` và `pfsense.ip` hiện IP ở dòng 2.
+- Cảnh báo lưu lượng glow vàng/đỏ, tự động xoay qua từng switch.
+- Hỗ trợ switch yếu không chạy được qua integration bằng sensor SNMP YAML (switch thêm tay).
+- Trình chỉnh sửa trực quan, không bắt buộc cấu hình YAML.
 
 **English**
-- Every switch is draggable; the arrange frame covers the whole diagram.
-- Device columns of every switch can be pinned by dragging the header; double-click to unpin.
-- Core switch column opens/closes independently.
-- Flow lines enter ports from the side.
-- Cleaner nodes: line 2 shows only the IP; model, port count, ping and CPU/RAM moved to the tooltip.
-- Added `node_opacity`.
-- Fixed port names for switches whose port entities only have throughput sensors (for example TP-Link SG2210P).
-- Added `isp.ip` and `pfsense.ip`.
-- Added a Speedtest tile in the header.
-- Auto-rotate wording now says *switch* instead of *AP*.
-
-## v0.1.0
-
-- Phát hành lần đầu / Initial release: sơ đồ cây ISP → pfSense → switch lõi → switch → cổng, đường flow chuyển động, cảnh báo lưu lượng, tự động xoay, Glass/Neon, trình chỉnh sửa trực quan.
+- Tree diagram ISP → pfSense → core switch → switches → ports with devices, horizontal or vertical, animated flow lines driven by real bandwidth.
+- Drag every node (switches included), pin device columns by dragging the header (double-click to unpin), independent core switch column, flow lines entering ports from the side, layout saved per HA user.
+- Glass/Neon styles, `node_opacity`, zoom, fullscreen, port search, Speedtest tile in the header.
+- Smart ports: names from port descriptions, `port_names`, hide switches/ports, `isp.ip` and `pfsense.ip` show IPs on line 2.
+- Yellow/red traffic glow alerts, auto-rotate through switches.
+- Support for weak switches that cannot run through the integration, using YAML SNMP sensors (manual switches).
+- Visual editor, no mandatory YAML.

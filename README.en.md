@@ -1,7 +1,7 @@
 # 🌐 SNMP Topo LAN Card
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-1.0.0-blue)
 ![HA](https://img.shields.io/badge/Home%20Assistant-2024.6+-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -25,7 +25,7 @@ Data comes from the **SNMP Switch Manager** integration. For weak switches that 
 
 ---
 
-## ✨ Features (v0.2.0)
+## ✨ Features (v1.0.0)
 
 ### 🎨 Display & interface
 - 🌳 **Tree diagram** ISP → pfSense → core switch → child switches → ports with devices, drawn horizontally or vertically
@@ -91,7 +91,7 @@ Entity pickers for ISP/WAN/pfSense/Speedtest, a link composer, sliders for opaci
 2. Copy it to `/config/www/community/snmp-topo-lan-card/snmp-topo-lan-card.js`.
 3. **Settings → Dashboards → Resources → Add resource**:
    ```
-   URL:  /local/community/snmp-topo-lan-card/snmp-topo-lan-card.js?v=0.2.0
+   URL:  /local/community/snmp-topo-lan-card/snmp-topo-lan-card.js?v=1.0.0
    Type: JavaScript module
    ```
 4. Hard-reload the browser. Change the number after `?v=` whenever you replace the file to avoid caching.
@@ -591,20 +591,14 @@ switches:
 
 ## 📋 Changelog
 
-### v0.2.0
-- ✋ Every switch is draggable, arrange frame covers the whole diagram
-- 📌 Device columns of every switch can be pinned by dragging the header; double-click to unpin
-- 🖧 Core switch column opens/closes independently
-- ➡️ Flow lines enter ports from the side
-- 🧹 Cleaner nodes: line 2 shows only the IP; model, port count, ping, CPU/RAM moved to the tooltip
-- 🪟 Added `node_opacity`
-- 🏷️ Fixed port names for switches whose port entities only have throughput sensors (for example TP-Link SG2210P)
-- 🌐 Added `isp.ip` and `pfsense.ip`
-- 🚀 Speedtest tile in the header
-- 🔁 Auto-rotate wording now says *switch* instead of *AP*
-
-### v0.1.0
-- 🚀 Initial release: tree diagram, animated flow lines, traffic alerts, auto-rotate, Glass/Neon, visual editor
+### v1.0.0: first release
+- 🌳 Tree diagram ISP → pfSense → core switch → switches → ports with devices, horizontal or vertical, animated flow lines driven by real bandwidth
+- ✋ Drag every node (switches included), pin device columns, independent core switch column, flow lines entering ports from the side, layout saved per HA user
+- 🎨 Glass/Neon styles, `node_opacity`, zoom, fullscreen, port search, Speedtest tile in the header
+- 🔌 Smart ports: names from port descriptions, `port_names`, hide switches/ports, `isp.ip` and `pfsense.ip` show IPs on line 2
+- 🔔 Yellow/red traffic glow alerts, auto-rotate through switches
+- 🧱 Support for weak switches that cannot run through the integration, using YAML SNMP sensors (manual switches)
+- 🎛️ Visual editor, no mandatory YAML
 
 ---
 

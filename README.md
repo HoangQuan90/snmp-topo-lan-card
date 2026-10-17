@@ -1,7 +1,7 @@
 # 🌐 SNMP Topo LAN Card
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-1.0.0-blue)
 ![HA](https://img.shields.io/badge/Home%20Assistant-2024.6+-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -25,7 +25,7 @@ Dữ liệu lấy từ integration **SNMP Switch Manager**. Với switch yếu k
 
 ---
 
-## ✨ Tính năng (v0.2.0)
+## ✨ Tính năng (v1.0.0)
 
 ### 🎨 Hiển thị & giao diện
 - 🌳 **Sơ đồ cây** ISP → pfSense → switch lõi → switch con → cổng có thiết bị, vẽ ngang (`horizontal`) hoặc dọc (`vertical`)
@@ -91,7 +91,7 @@ Entity picker cho ISP/WAN/pfSense/Speedtest, trình soạn đường nối, than
 2. Chép vào `/config/www/community/snmp-topo-lan-card/snmp-topo-lan-card.js`.
 3. **Settings → Dashboards → Resources → Add resource**:
    ```
-   URL:  /local/community/snmp-topo-lan-card/snmp-topo-lan-card.js?v=0.2.0
+   URL:  /local/community/snmp-topo-lan-card/snmp-topo-lan-card.js?v=1.0.0
    Type: JavaScript module
    ```
 4. Hard-reload trình duyệt. Đổi số sau `?v=` mỗi khi thay file để tránh cache.
@@ -591,20 +591,14 @@ switches:
 
 ## 📋 Lịch sử thay đổi
 
-### v0.2.0
-- ✋ Mọi switch kéo thả được, khung sắp xếp phủ toàn bộ sơ đồ
-- 📌 Cột thiết bị của mọi switch ghim được bằng cách kéo tiêu đề; bấm đúp để bỏ ghim
-- 🖧 Cột switch lõi mở/đóng độc lập
-- ➡️ Đường flow đi vào cổng từ cạnh bên
-- 🧹 Node gọn hơn: dòng 2 chỉ hiện IP; model, số cổng, ping, CPU/RAM chuyển vào tooltip
-- 🪟 Thêm `node_opacity`
-- 🏷️ Sửa tên cổng cho các switch mà entity cổng chỉ có sensor throughput (ví dụ TP-Link SG2210P)
-- 🌐 Thêm `isp.ip` và `pfsense.ip`
-- 🚀 Ô Speedtest ở header
-- 🔁 Tự động xoay ghi thống nhất là *switch* thay vì *AP*
-
-### v0.1.0
-- 🚀 Phát hành lần đầu: sơ đồ cây, đường flow chuyển động, cảnh báo lưu lượng, tự động xoay, Glass/Neon, trình chỉnh sửa trực quan
+### v1.0.0 — bản phát hành đầu tiên
+- 🌳 Sơ đồ cây ISP → pfSense → switch lõi → switch → cổng có thiết bị, vẽ ngang hoặc dọc, đường flow chuyển động theo băng thông thật
+- ✋ Kéo thả mọi node (kể cả switch), ghim cột thiết bị, cột switch lõi mở/đóng độc lập, đường flow vào cổng từ cạnh bên, bố cục lưu theo người dùng HA
+- 🎨 Giao diện Glass/Neon, `node_opacity`, zoom, toàn màn hình, tìm kiếm cổng, ô Speedtest ở header
+- 🔌 Cổng thông minh: tự đặt tên từ mô tả cổng, `port_names`, ẩn switch/cổng, `isp.ip` và `pfsense.ip` hiện IP ở dòng 2
+- 🔔 Cảnh báo lưu lượng glow vàng/đỏ, tự động xoay qua từng switch
+- 🧱 Hỗ trợ switch yếu không chạy được qua integration bằng sensor SNMP YAML (switch thêm tay)
+- 🎛️ Trình chỉnh sửa trực quan, không cần cấu hình YAML bắt buộc
 
 ---
 

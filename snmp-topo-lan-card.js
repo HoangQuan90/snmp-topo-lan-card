@@ -1,12 +1,12 @@
 /**
- * snmp-topo-lan-card v0.2.0
+ * snmp-topo-lan-card v1.0.0
  * Topo LAN dạng cây: ISP → pfSense → switch lõi → các switch khác → cổng có thiết bị
- * v0.2.0: kéo thả được cả switch, vùng sắp xếp phủ toàn bộ sơ đồ trong card, node gọn hơn (dòng 2 chỉ IP) và rộng hơn.
+ * v1.0.0 (bản phát hành đầu tiên): kéo thả được cả switch, vùng sắp xếp phủ toàn bộ sơ đồ trong card, node gọn hơn (dòng 2 chỉ IP) và rộng hơn.
  * Dữ liệu: integration SNMP Switch Manager (switch / cổng / băng thông), sensor SNMP YAML cho
  * switch không thêm được vào integration, và sensor pfSense (ISP / WAN).
  * Dựa trên unifi-topo-wifi-card v0.11.0: giữ nguyên flow, bố cục kéo thả, cảnh báo, editor.
  */
-const CARD_VERSION = '0.2.0';
+const CARD_VERSION = '1.0.0';
 const CARD_TAG = 'snmp-topo-lan-card';
 const STYLES = ['glass', 'neon'];       // glass: theo theme HA (sáng/tối) | neon: nền tối cố định
 const STYLE_KEY = 'utwc-style';         // localStorage: lựa chọn giao diện, dùng chung cho mọi card
