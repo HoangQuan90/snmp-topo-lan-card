@@ -1,7 +1,7 @@
 # 🌐 SNMP Topo LAN Card
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-![version](https://img.shields.io/badge/version-1.0.0-blue)
+![version](https://img.shields.io/badge/version-1.0.1-blue)
 ![HA](https://img.shields.io/badge/Home%20Assistant-2024.6+-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -9,7 +9,7 @@
 
 A custom Home Assistant Lovelace card that draws your whole LAN as a live tree: **ISP → pfSense → core switch → other switches → ports with devices**. Animated flow lines scale in speed and thickness with real bandwidth, the layout is drag-and-drop, and there are traffic alerts and a visual config editor.
 
-Data comes from the **SNMP Switch Manager** integration. For weak switches that cannot run through the integration, use plain SNMP sensors in YAML. **No extra frontend plugins, fully configurable from the built-in editor.**
+Data comes from the **SNMP Switch Manager** integration (default) or from any integration that exposes entities in the expected format (see **Data source**). pfSense is optional, and switches without SNMP can be declared by hand, ports included. For weak switches that cannot run through the integration, use plain SNMP sensors in YAML. **No extra frontend plugins, fully configurable from the built-in editor.**
 
 > 📌 **Conventions:** IP addresses are written as `192.168.1.x` (replace `x` with the real device IP). The community string is written as `<COMMUNITY>` and kept only in `secrets.yaml`. Switch names used in examples: `SW-CORE`, `Switch1-251`, `Switch2-252`, `SF220`.
 
@@ -25,7 +25,7 @@ Data comes from the **SNMP Switch Manager** integration. For weak switches that 
 
 ---
 
-## ✨ Features (v1.0.0)
+## ✨ Features (v1.0.1)
 
 ### 🎨 Display & interface
 - 🌳 **Tree diagram** ISP → pfSense → core switch → child switches → ports with devices, drawn horizontally or vertically
@@ -55,6 +55,15 @@ Data comes from the **SNMP Switch Manager** integration. For weak switches that 
 - 🟡🔴 **Yellow/red glow** when traffic exceeds both the tier floor **and** yesterday's average times a factor
 - 🛡️ **No false alarms**: small devices only glow above the floor; the glow stops as soon as the heavy traffic ends
 
+### 🆕 New in v1.0.1
+- 🔌 **`platform`**: choose the source integration (string or list); other integrations only need to expose entities following the "contract"
+- 🌐 **pfSense is optional**: the ISP connects straight to the core switch; `isp.enabled` / `pfsense.enabled: false` hides a node but keeps its settings
+- 🧱 **Manual switches with ports** (`switches[].ports`): clicking the switch opens a device list just like an SNMP switch
+- ⚠️ **Connection-lost alerts**: red border and dot plus a "⚠ connection lost" line; click it to open the missing entity's more-info
+- ⚡ **Lighter**: the diagram is only rebuilt when a relevant entity changes; off-screen or hidden-tab cards refresh every 5 seconds
+- 📱 **Compact phone header** (3 rows when the card is narrower than 560px) and **zoom remembered per device**
+- 🐞 Fixes: empty options no longer override defaults, auto-rotate no longer re-selects right after you close a switch, whole-day baseline loss, redundant layout reloads, registry errors delayed 10 minutes… (see **Changelog**)
+
 ### 🎛️ Visual editor
 Entity pickers for ISP/WAN/pfSense/Speedtest, a link composer, sliders for opacity/blur/zoom/height/alert thresholds, accordion sections.
 
@@ -65,7 +74,7 @@ Entity pickers for ISP/WAN/pfSense/Speedtest, a link composer, sliders for opaci
 | | |
 |---|---|
 | Home Assistant | 2024.6+ |
-| Integration | **[SNMP Switch Manager](https://github.com/OtisPresley/snmp-switch-manager)** (via HACS) with **Bandwidth Collection** enabled. Weak switches can use YAML sensors instead |
+| Integration | **[SNMP Switch Manager](https://github.com/OtisPresley/snmp-switch-manager)** (via HACS) with **Bandwidth Collection** enabled. Since v1.0.1 another integration can be used through `platform` (see **Data source**). Weak switches can use YAML sensors instead |
 | Account | **Administrator**, because the card reads the device and entity registry |
 | pfSense | Optional: ISP status, WAN speed, CPU/RAM/state |
 | Speedtest.net | Optional: header Speedtest tile |
@@ -91,7 +100,7 @@ Entity pickers for ISP/WAN/pfSense/Speedtest, a link composer, sliders for opaci
 2. Copy it to `/config/www/community/snmp-topo-lan-card/snmp-topo-lan-card.js`.
 3. **Settings → Dashboards → Resources → Add resource**:
    ```
-   URL:  /local/community/snmp-topo-lan-card/snmp-topo-lan-card.js?v=1.0.0
+   URL:  /local/community/snmp-topo-lan-card/snmp-topo-lan-card.js?v=1.0.1
    Type: JavaScript module
    ```
 4. Hard-reload the browser. Change the number after `?v=` whenever you replace the file to avoid caching.
@@ -241,7 +250,7 @@ for sw, host in (("swpoe1", "192.168.1.x"), ("swpoe2", "192.168.1.x")):
 - Each switch receives about 24 small queries every 30 to 60 seconds. If `snmpwalk` or the switch web UI becomes slow, raise `scan_interval` to 60.
 - YAML sensors report **bytes/s**, integration sensors report **bit/s**. The card converts units automatically when you set `down`/`up` in `links`.
 - If your HA version does not accept the YAML `derivative` platform, create the equivalent with a Derivative helper using the same source and time window.
-- For a manually declared switch the card reads only the **uplink** (see **Manual switch** in the examples). Port 1 to 8 sensors are for your own dashboards or history.
+- For a manually declared switch, since v1.0.1 you declare each port with `switches[].ports` so that clicking the switch opens a device list (see **Manual switches and their ports**). The `*_in_rate` / `*_out_rate` sensors above work directly as `rx` / `tx` (the `B/s` unit is supported). The SNMP status sensor returns `1` (up) or `2` (down) and the card does not treat `2` as link lost, so for ports that need accuracy create a template sensor that maps `2` to `down`, or drop `status` and let the card infer it from traffic.
 
 ---
 
@@ -277,6 +286,8 @@ Click **✏️ Edit** to open the Config Editor:
 |---|---|
 | **Click a switch** | Opens its device-port column; click again to close |
 | **Click the core switch** | Opens its own column, not counted in "switches open at once" |
+| **Click the ⚠ connection-lost line** | Opens the more-info of the missing entity (also on switch nodes) |
+| **Click the ISP / pfSense node** | Opens more-info (the missing entity if any, otherwise the main entity) |
 | **✥ button** | Enter arrange mode and drag any node anywhere |
 | **Drag a column header** | Pin the port column where you drop it (📌); double-click to unpin |
 | **✓ / ↺ buttons** | Save layout / reset to default |
@@ -289,6 +300,123 @@ Click **✏️ Edit** to open the Config Editor:
 > **Direction convention:** `↓` is data going from pfSense/core **down** to devices, `↑` is the opposite. If the arrows look reversed, set `swap_rx_tx: true`.
 
 ---
+
+## 🔗 Data source: `platform` and the entity "contract"
+
+```yaml
+platform: snmp_switch_manager   # default; accepts a string or a list
+# platform: [snmp_switch_manager, my_rest_integration]
+```
+
+The card reads the **entity registry** and only takes entities whose `platform` is in this list. Entities of the same **device** count as **one switch**. Other integrations (REST for MikroTik/UniFi, template…) only need to expose entities in the format below, no SNMP on the device required. Changing `platform` reloads the registry.
+
+**1. Each port: one `switch.*` entity** with these attributes:
+
+| Attribute | Required | Meaning |
+|---|---|---|
+| `Index` | yes | integer, the port key; used to pair with sensors via `if_index` |
+| `Name` | recommended | port name (`Gi1/0/1`, `ether2`); used by `core.ports`, `links`, `port_names`, `exclude_ports` |
+| `Oper` | recommended | `up` or `down`. Missing: the card infers it from traffic |
+| `Alias` | no | port description; in the form `NAME-192.168.1.x` the card splits name and IP |
+| `Speed` | no | link speed string, shown on hover only |
+| `Port Type` | no | `physical` or empty is shown; other values (`lag`, `vlan`…) are hidden |
+
+Attribute names accept lowercase and underscore forms too (`Port Type`, `port type`, `port_type`).
+
+**2. Each port, each direction: one `sensor.*` speed entity:**
+
+| Attribute | Meaning |
+|---|---|
+| `direction` | `rx` or `tx` (or an entity_id ending in `_rx_throughput` / `_tx_throughput`) |
+| `kind` | `throughput` (or an entity_id ending in `_throughput`) |
+| `if_index` | equal to the port's `Index` |
+| `unit_of_measurement` | one of `bit/s`, `kbit/s`, `Mbit/s`, `Gbit/s`, `B/s`, `kB/s`, `KiB/s`, `MB/s`, `MiB/s`, `GB/s` |
+
+Negative values (counter reset) count as 0. A sensor without a unit from the list above is left out of speed and baseline.
+
+**3. The switch name** is the device's `name_by_user` (or `name`). The part after the first dot is ignored when matching, so `CORE-SW` matches the device `core-sw.example.lan`. This name is used in `core.switch`, `links[].parent/child`, `port_names`…
+
+## 🧭 No pfSense: ISP straight to the core switch
+
+Drop the `pfsense` block and the ISP connects straight to the core switch. The ISP → core speed comes from `wan` if present, otherwise from the sum of the `core.ports`. Example with a MikroTik router as core switch and the modem plugged into `ether1`/`ether2`:
+
+```yaml
+type: custom:snmp-topo-lan-card
+title: LAN Network
+platform: snmp_switch_manager
+isp:
+  name: ISP
+  status: binary_sensor.wan_status     # optional
+core:
+  switch: CCR2004
+  ports: [ether1, ether2]              # ports toward the modem; speeds are summed and not shown as devices
+links:
+  - { parent: CCR2004, parent_port: sfp-sfpplus1, child: CRS310, child_port: sfp1 }
+```
+
+To switch a node off temporarily while keeping its settings: `isp: { enabled: false, ... }` or `pfsense: { enabled: false, ... }`.
+
+## 🧱 Manual switches and their ports
+
+A switch that is not in the source integration (for example Netgear Plus via [ha-netgear-plus](https://github.com/ckarrie/ha-netgear-plus), or an SG2210P read through the YAML sensors in **When the integration fails**) is declared under `switches` and attached to the tree with `links`. Add `ports` and clicking the switch opens a device list like an SNMP switch:
+
+```yaml
+links:
+  - { parent: SW-CORE, parent_port: Gi1/0/9, child: SG2210P-1, child_port: 9 }   # port 9 is the uplink, not shown as a device
+switches:
+  - name: SG2210P-1
+    model: SG2210P
+    ports:
+      - { port: 1, name: "Camera 1", ip: 192.168.1.x, rx: sensor.swpoe1_p1_in_rate, tx: sensor.swpoe1_p1_out_rate, status: sensor.swpoe1_p1_status }
+      - { port: 2, name: "Living room AP", rx: sensor.swpoe1_p2_in_rate, tx: sensor.swpoe1_p2_out_rate }
+      - { port: 9, name: "Uplink", rx: sensor.swpoe1_sfp1_in_rate, tx: sensor.swpoe1_sfp1_out_rate }
+```
+
+*(entity_ids are examples, replace with your real entities)*
+
+| Key | Required | Meaning |
+|---|---|---|
+| `port` | yes | port number or name (`1`, `ether2`); matched against `child_port` / `exclude_ports` |
+| `name` | no | device name shown on the node |
+| `ip` | no | IP shown on line 2 |
+| `icon` | no | custom `mdi:` icon |
+| `rx`, `tx` | no | **one** speed sensor per direction; units are converted from `unit_of_measurement` (see the unit table above) |
+| `status` | no | link status entity: `on`/`up`/`1`/`true`/`connected`/`online` means link, `off`/`down`/`0`/`false`/`disconnected`/`offline` means no link. Missing or any other value: the port counts as up when it has traffic |
+
+The ↓ ↑ direction matches the other switches (↓ goes down toward the device; `rx` is data from the device into the switch). Set `swap_rx_tx: true` if it looks reversed. If every port entity of this switch is `unavailable`, the node shows "⚠ connection lost".
+
+## ⚠️ Connection-lost alerts
+
+An `unavailable` entity (or one that no longer exists in HA) turns the node's border and dot red and adds a "⚠ connection lost: entity name +N" line. `unknown` is treated as normal (common right after HA starts).
+
+| Node | Entities watched |
+|---|---|
+| ISP | `status`, `delay`, `loss` and the WAN sensors (or the `core.ports` sensors when there is no pfSense) |
+| pfSense | `cpu`, `ram`, `states` |
+| Core switch | sensors and status of the ports uplinking to pfSense/ISP |
+| Child switches | sensors and status of the `links` entry; for manual switches with `ports`, alerts when **every** port entity is lost |
+
+- Click the ISP or pfSense node to open the more-info of the missing entity (the main entity when nothing is missing).
+- On a switch, clicking the node only opens/closes the port list, so the **warning line** is separately clickable to open more-info.
+- The alert clears by itself when the entity returns.
+
+## ⚡ Performance and phones
+
+- The card compares the state of the relevant entities and **skips rebuilding the diagram when nothing changed**; unrelated entities never trigger a rebuild.
+- An off-screen card or hidden tab **refreshes every 5 seconds** (constant `SLOW_TICK_MS`) and refreshes immediately when shown again.
+- Wheel zoom and node dragging are coalesced into one update per frame; icons are cached by name.
+- The header sparkline redraws when data changes, and hides when the card is narrower than 980px.
+- A failed registry load is retried after **30 seconds** (previously 10 minutes).
+- **Phone header:** when the card is narrower than 560px the header stacks into three rows (logo and name; stat tiles that shrink to fit; toolbar buttons that wrap and center, with the search box taking a full row when open). Below 400px the stat tiles use 2 columns, with the "Ports up" and Speedtest tiles spanning the full row. On screens below 600px the card's outer padding drops from 14px to 8px. This has only been tried on a simulated header, so please check it on a real phone.
+
+## 🔍 Zoom remembered per device
+
+The zoom level is stored in the browser's `localStorage` on **each device** and is not synced through HA: phone and computer each remember their own level, and a page reload keeps it.
+
+- **When it is saved:** every time you press `+`, `−`, click the `%` value to go back to 100%, press "fit", or use the wheel.
+- **Priority:** on first open, a saved level is used; if there is none, the `zoom` from YAML; otherwise 100%.
+- **When you change `zoom` in the config or editor:** the new level is used immediately and the saved level on that device is cleared. Changing other options keeps the current zoom.
+- **Several cards:** each `layout_id` (or `title` when there is no `layout_id`) has its own saved zoom.
 
 ## 🏷️ Naming and name mapping
 
@@ -349,6 +477,7 @@ exclude_ports: ["SW-CORE:Gi1/0/8", "Gi1/0/24"]   # a bare "Gi1/0/24" hides it on
 |---|---|---|---|
 | `title` | string | — | Card title |
 | `subtitle` | string | `LAN Topology` | Line under the title |
+| `platform` | string / list | `snmp_switch_manager` | Source integration of the switch data (see **Data source**) |
 | `orientation` | string | `horizontal` | `horizontal` or `vertical` |
 | `height` | number / `auto` | `auto` | Card height (px, 100–2000); fixed height scrolls inside the card |
 | `client_columns` | number | `2` | Switches open at once (1–3), core excluded |
@@ -369,9 +498,11 @@ exclude_ports: ["SW-CORE:Gi1/0/8", "Gi1/0/24"]   # a bare "Gi1/0/24" hides it on
 | `node_opacity` | number | `80` | Node opacity (%); raise it so flow lines do not show through text |
 | `active_threshold_bps` | number | `2000` | Links below this stay still |
 | `hide_scrollbar` | boolean | `true` | Hide the scrollbar (wheel/touch still scroll) |
-| `show_zoom` / `zoom` / `wheel_zoom` | bool / number / string | `true` / `1` / `ctrl` | Zoom buttons, initial level 0.3–1.6, `ctrl` or `always` |
+| `show_zoom` / `zoom` / `wheel_zoom` | bool / number / string | `true` / `1` / `ctrl` | Zoom buttons, initial level 0.3–1.6 (a level saved on the device takes priority, see **Zoom remembered per device**), `ctrl` or `always` |
 | `switch_logo` | string | — | One shared logo for all switches |
 | `exclude_switches`, `exclude_ports`, `port_names`, `links`, `switches` | list / map | empty | See the matching sections |
+
+> **Empty options** in YAML (for example `max_ports:`) no longer override the default; this also applies to `alerts`, `floors` and `auto`. The `warn`/`crit` pairs (and `factor_warn`/`factor_crit`) must satisfy `crit ≥ warn`, otherwise the card reports a config error; in the editor, dragging one side past the other drags the other side along.
 
 ### `core`: core switch *(required)*
 
@@ -398,8 +529,9 @@ exclude_ports: ["SW-CORE:Gi1/0/8", "Gi1/0/24"]   # a bare "Gi1/0/24" hides it on
 |---|---|
 | `name` | Switch name (used in `links`) |
 | `model`, `ip`, `logo` | Model (tooltip), IP (display only), logo |
+| `ports[]` | Hand-declared ports (`port`, `name`, `ip`, `icon`, `rx`, `tx`, `status`), see **Manual switches and their ports** |
 
-> A manual switch only appears when a `links` entry points to it. Do not declare it here if the integration already has that switch, or you will see two nodes.
+> A manual switch only appears when a `links` entry points to it. Do not declare it here if the integration already has that switch, or you will see two nodes. Without `ports` only the uplink can be measured (through `down`/`up` in `links`).
 
 ### `isp`, `pfsense`, `wan`, `speedtest`
 
@@ -413,6 +545,7 @@ exclude_ports: ["SW-CORE:Gi1/0/8", "Gi1/0/24"]   # a bare "Gi1/0/24" hides it on
 | `pfsense.cpu` / `ram` / `states` | CPU %, RAM %, state count, shown in the tooltip |
 | `wan.down` / `wan.up` | WAN speed; several entities (list) are summed |
 | `speedtest.down` / `up` / `ping` | Latest Speedtest in the header; one entity is enough to show the tile |
+| `isp.enabled` / `pfsense.enabled` | `false` hides the node but keeps its settings (without pfSense the ISP connects straight to the core switch) |
 
 Supported speed units: `bit/s`, `kbit/s`, `Mbit/s`, `Gbit/s`, `B/s`, `kB/s`, `KiB/s`, `MB/s`, `MiB/s`, `GB/s`.
 
@@ -533,13 +666,14 @@ core:
 
 ### 🧱 Manual switch without the integration
 
-Use this when a switch cannot be read through the integration and you created uplink sensors in YAML (see **When the integration fails**):
+Use this when a switch cannot be read through the integration and you created sensors in YAML (see **When the integration fails**). Add `ports` to get a device list; for the uplink only, use `down` / `up` / `status` in `links`:
 
 ```yaml
 links:
   - parent: SW-CORE
     parent_port: Gi1/0/9
     child: SG2210P-1
+    child_port: 9
     child_ip: 192.168.1.x
     down: sensor.swpoe1_sfp1_in_rate     # parent → child (child's IN)
     up: sensor.swpoe1_sfp1_out_rate      # child → parent (child's OUT)
@@ -548,6 +682,9 @@ switches:
   - name: SG2210P-1
     model: SG2210P
     ip: 192.168.1.x
+    ports:
+      - { port: 1, name: "Camera 1", ip: 192.168.1.x, rx: sensor.swpoe1_p1_in_rate, tx: sensor.swpoe1_p1_out_rate }
+      - { port: 2, name: "Living room AP", rx: sensor.swpoe1_p2_in_rate, tx: sensor.swpoe1_p2_out_rate }
 ```
 
 ---
@@ -572,6 +709,11 @@ switches:
 |---|---|
 | `snmpwalk` times out | Community not applied/saved, SNMP is off, or the ACL does not allow the HA IP |
 | Integration errors after changing the community | Set **SNMP Community Override**, or delete and re-add |
+| ISP/pfSense/switch node is red with "⚠ connection lost" | An entity is `unavailable` or was deleted; click the warning line to open more-info and check the source integration/device |
+| Using another integration but no switch shows | Set the right `platform`; entities must carry the attributes from the **entity contract** and belong to the same device |
+| A manual switch port always shows up | The SNMP `status` value `2` is not treated as down: use a template sensor mapping `2` to `down`, or drop `status` |
+| Changed `zoom` in YAML but the card did not change | The zoom saved on the device takes priority; change the `zoom` value itself (the card clears the saved level), or click the `%` value to go back to 100% |
+| Card errors on an empty `max_ports:` | Since v1.0.1 empty options fall back to defaults; update the card and change `?v=` in the resource URL |
 | Weak switch keeps timing out in the integration | Use YAML sensors and declare a manual switch |
 | Include rule yields no sensors | Value must match the name in Controls; try Match **Contains** |
 | Throughput shows `Unknown` | Wait 1–2 minutes, two reads are needed |
@@ -590,6 +732,17 @@ switches:
 ---
 
 ## 📋 Changelog
+
+### v1.0.1
+- 🔌 Added `platform` (choose the source integration, string or list) and the entity "contract" for other integrations
+- 🌐 Without pfSense the ISP connects straight to the core switch (speed from `wan` or `core.ports`); added `isp.enabled` / `pfsense.enabled`
+- 🧱 Manual switches can declare `ports` (`rx`, `tx`, `status`) and so open a device list
+- ⚠️ Connection-lost alerts for ISP, pfSense, core switch and switches; click the node or the warning line to open more-info
+- ⚡ The diagram is only rebuilt when a relevant entity changes; off-screen or hidden-tab cards refresh every 5 seconds; wheel zoom and node drag coalesced per frame; icon cache
+- 📱 Compact phone header (3 rows below 560px, 2-column stat tiles below 400px), card padding reduced to 8px below 600px
+- 🔍 Zoom saved per device and per `layout_id`/`title`; changing `zoom` in the config makes the config win
+- 🐞 Fixed: empty options no longer override defaults (also `alerts`, `floors`, `auto`); auto-rotate no longer re-selects right after the last switch is closed, so `pause_on_tap` works; loading the file twice no longer breaks the card or duplicates `customCards`; the editor keeps `crit ≥ warn` while dragging sliders; a sensor without state no longer loses the baseline for the whole day (retried after 60 seconds, old `null` values in localStorage ignored); the layout only reloads when `layout_id`/`title` changes; editing an option in the editor no longer resets the zoom in use; a failed registry load retries after 30 seconds instead of 10 minutes; the sparkline redraws when data changes; leftover AP wording in the editor now says switch
+- 🧹 Code cleanup: config rule table (`RULES`), merged layout read/write helpers, merged duplicate CSS, removed unused functions and variables
 
 ### v1.0.0: first release
 - 🌳 Tree diagram ISP → pfSense → core switch → switches → ports with devices, horizontal or vertical, animated flow lines driven by real bandwidth

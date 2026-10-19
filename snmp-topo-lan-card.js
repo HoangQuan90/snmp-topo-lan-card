@@ -1,17 +1,42 @@
 /**
- * snmp-topo-lan-card v1.0.0
+ * snmp-topo-lan-card v1.0.1
  * Topo LAN dạng cây: ISP → pfSense → switch lõi → các switch khác → cổng có thiết bị
- * v1.0.0 (bản phát hành đầu tiên): kéo thả được cả switch, vùng sắp xếp phủ toàn bộ sơ đồ trong card, node gọn hơn (dòng 2 chỉ IP) và rộng hơn.
  * Dữ liệu: integration SNMP Switch Manager (switch / cổng / băng thông), sensor SNMP YAML cho
  * switch không thêm được vào integration, và sensor pfSense (ISP / WAN).
  * Dựa trên unifi-topo-wifi-card v0.11.0: giữ nguyên flow, bố cục kéo thả, cảnh báo, editor.
+ *
+ * MỤC LỤC (tìm "[n/6]" để nhảy tới từng phần)
+ *   [1/6] Nạp Lit, hằng số & helper
+ *   [2/6] Cấu hình: bảng luật kiểm tra, khởi tạo, vòng đời của card
+ *   [3/6] Dữ liệu: registry → cây dữ liệu, cảnh báo mất kết nối / lưu lượng, baseline, nhịp cập nhật
+ *   [4/6] Tương tác: chọn switch, tự xoay, zoom, bố cục kéo thả
+ *   [5/6] Hiển thị: đường nối SVG, render, CSS
+ *   [6/6] Visual editor & đăng ký card
+ *
+ * v1.0.1
+ *   `platform`: chọn integration nguồn (chuỗi hoặc danh sách), mặc định snmp_switch_manager; integration khác chỉ cần
+ *   xuất entity đúng "hợp đồng" (xem README). Không có pfSense thì ISP nối thẳng vào switch lõi (tốc độ lấy từ
+ *   `wan`, không có thì từ `core.ports`); `isp.enabled` / `pfsense.enabled: false` để tắt node mà vẫn giữ cấu hình.
+ *   Switch khai báo tay có thêm `ports` (sensor rx / tx / status từng cổng) nên mở được danh sách thiết bị như switch SNMP.
+ * v0.3.0
+ *   Sửa lỗi: option để trống trong YAML không còn đè default · tự xoay không chọn lại ngay khi vừa đóng
+ *   hết switch (pause_on_tap có tác dụng) · nạp file 2 lần không làm card chết · editor tự giữ
+ *   crit ≥ warn khi kéo slider · sensor chưa có state không còn mất baseline cả ngày · bố cục đã lưu chỉ
+ *   nạp lại khi layout_id / title đổi · zoom ban đầu không bị đặt lại mỗi lần sửa config ·
+ *   refresh registry lỗi không bị hoãn 10 phút.
+ *   Cảnh báo mất kết nối (unavailable) cho ISP, pfSense, switch lõi và các switch.
+ *   Tối ưu cho máy yếu: chỉ dựng lại cây khi entity liên quan đổi · card ẩn / tab ẩn cập nhật 5 giây/lần ·
+ *   zoom bằng con lăn và kéo node gộp theo frame · bỏ ép layout thừa · cache icon theo tên.
+ *   Dọn code: bảng luật kiểm tra config, gộp hàm đọc/ghi layout, gộp CSS trùng, đổi nhãn AP → switch.
+ * v0.2.0: kéo thả được cả switch, vùng sắp xếp phủ toàn bộ sơ đồ trong card, node gọn hơn
+ *   (dòng 2 chỉ IP) và rộng hơn.
  */
-const CARD_VERSION = '1.0.0';
+const CARD_VERSION = '1.0.1';
 const CARD_TAG = 'snmp-topo-lan-card';
 const STYLES = ['glass', 'neon'];       // glass: theo theme HA (sáng/tối) | neon: nền tối cố định
 const STYLE_KEY = 'utwc-style';         // localStorage: lựa chọn giao diện, dùng chung cho mọi card
 
-// ───────────────────────── Nạp Lit ─────────────────────────
+// ═══ [1/6] NẠP LIT, HẰNG SỐ & HELPER ═══
 // Lấy LitElement từ chính HA frontend (không cần bundler).
 if (!customElements.get('ha-panel-lovelace') && !customElements.get('hui-view')) {
   await Promise.race([customElements.whenDefined('ha-panel-lovelace'), new Promise((r) => setTimeout(r, 3000))]);
@@ -29,12 +54,14 @@ if (!html || !css) {
   ));
 }
 
-// ───────────────────────── Hằng số & helper ─────────────────────────
 const BAD_STATES = ['unavailable', 'unknown', 'none', ''];
 const IDLE_BPS = 200; // dưới ngưỡng này coi là "idle" (dùng cho hide_idle)
+const REG_REFRESH_MS = 600000;   // nạp lại registry (có switch / cổng mới sau khi HA đã chạy)
+const SLOW_TICK_MS = 5000;       // card ngoài màn hình / tab ẩn: cập nhật chậm lại còn 5 giây/lần
+const ID_RE = /^[a-z_]+\.[a-z0-9_]+$/;   // entity_id hợp lệ
 
-// Bố cục mặc định của 3 node đầu: x (px, từ mép trái vùng hub), dy (px, lệch so với tâm dọc cột AP)
-const HUB_NW = 200;      // bề rộng cố định của node ISP / pfSense / Controller
+// Bố cục mặc định của 3 node đầu: x (px, từ mép trái vùng hub), dy (px, lệch so với tâm dọc cột switch)
+const HUB_NW = 200;      // bề rộng cố định của node ISP / pfSense / switch lõi
 const COL_NW = 230;      // bề rộng node cổng thiết bị trong cột (dùng để đặt cột của switch lõi)
 const DEFAULT_LAYOUT = {
   isp: { x: 0, dy: 0 },
@@ -61,10 +88,44 @@ const DEFAULT_ALERTS = {
   },
 };
 const ALERT_TIERS = Object.keys(DEFAULT_ALERTS.floors);
-// Tự động xoay AP: tự đổi AP đang mở danh sách client sau mỗi vài giây
+// Tự động xoay switch: tự đổi switch đang mở danh sách cổng sau mỗi vài giây
 const DEFAULT_AUTO = { mode: 'single', count: 2, interval: 6, skip_empty: true, pause_on_tap: 20 };
+// Mặc định của mọi option còn lại. setConfig gộp config vào đây; option để trống (null) bị bỏ qua.
+const DEFAULT_CONFIG = {
+  platform: 'snmp_switch_manager',   // integration nguồn dữ liệu switch (chuỗi hoặc danh sách)
+  orientation: 'horizontal',
+  flow_style: 'dash',
+  style: 'glass',          // glass | neon
+  style_toggle: true,      // hiện nút đổi giao diện ở header
+  hide_scrollbar: true,
+  subtitle: 'LAN Topology',
+  node_blur: 0,
+  node_opacity: 80,
+  transparent: true,
+  blur: 6,
+  max_ports: 24,               // số cổng tối đa hiện cho mỗi switch
+  sort_clients: 'port',        // 'port' (theo số cổng) | 'name' | 'traffic' (nhảy theo lưu lượng)
+  active_threshold_bps: 2000,  // dưới ngưỡng này đường nối đứng yên, không chạy animation
+  hide_idle: false,
+  show_down_ports: false,      // true: hiện cả cổng không có link
+  link_labels: true,           // nhãn ↓ ↑ trên đường nối giữa các switch
+  client_columns: 2,           // số switch mở danh sách cổng cùng lúc
+  show_zoom: true,
+  wheel_zoom: 'ctrl',
+  layout_edit: true,
+  swap_rx_tx: false,           // true nếu ↓ ↑ bị ngược chiều
+  exclude_switches: [],
+  exclude_ports: [],
+  port_names: {},
+  links: [],
+  switches: [],
+};
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+// Bỏ các key null / undefined: option để trống trong YAML (ví dụ "max_ports:") không đè mất giá trị mặc định
+const defined = (o) => Object.fromEntries(Object.entries(isObj(o) ? o : {}).filter(([, v]) => v != null));
+const getPath = (o, p) => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o);
 
 // Quy mọi đơn vị tốc độ về bit/s
 const UNIT_TO_BPS = {
@@ -106,7 +167,6 @@ const flowVars = (bps) => {
   return `--w:${(2 + t * 4).toFixed(1)}px;--d:${(2.6 - t * 2).toFixed(2)}s;--o:${(0.5 + t * 0.5).toFixed(2)}`;
 };
 
-const SNMP_PLATFORM = 'snmp_switch_manager';
 
 // Attribute của integration có khoảng trắng / viết hoa ("Port Type", "Oper") → thử vài cách viết
 const g = (a, k) => {
@@ -133,7 +193,7 @@ const isDefaultAlias = (alias, name) => {
   return !a || a === normPort(name) || /^(gi|fa|te|tw|po|eth)\d[\d/.]*$/.test(a);
 };
 
-// "FRIGATE-192.168.1.x" → tên "FRIGATE" + IP "192.168.1.x"
+// "CAMERA-192.0.2.4" → tên "CAMERA" + IP "192.0.2.4"
 const IP_RE = /\b(\d{1,3}(?:\.\d{1,3}){3})\b/;
 const splitAlias = (alias) => {
   const m = IP_RE.exec(alias);
@@ -150,13 +210,22 @@ const parseNm = (v) => {
   return { name: a || '', ip: b || '' };
 };
 
-const portIcon = (s) =>
+const pickIcon = (s) =>
   /cam|nvr|frigate|chuong|chu[oô]ng|doorbell/i.test(s) ? 'mdi:cctv'
   : /\bnas\b|hass|server|proxmox|pve|\bvm\b|docker/i.test(s) ? 'mdi:server'
   : /\bap\b|unifi|wifi|wlan/i.test(s) ? 'mdi:access-point'
   : /hub|switch|\bsw\b|sg\d|c1000|sf\d/i.test(s) ? 'mdi:lan-connect'
   : /\bpc\b|desktop|laptop|notebook/i.test(s) ? 'mdi:laptop'
   : 'mdi:ethernet';
+const iconCache = new Map();   // icon theo chuỗi tên: 5 regex chỉ chạy một lần cho mỗi tên
+const portIcon = (s) => {
+  let v = iconCache.get(s);
+  if (v === undefined) {
+    if (iconCache.size > 500) iconCache.clear();
+    iconCache.set(s, (v = pickIcon(s)));
+  }
+  return v;
+};
 
 // Mức cảnh báo: 0 = bình thường, 1 = vàng, 2 = đỏ. Chỉ sáng khi vượt CẢ mức sàn của tầng
 // lẫn (trung bình hôm qua × hệ số); chưa có lịch sử (base = null) thì chỉ so với mức sàn.
@@ -184,6 +253,118 @@ const avgSeries = (pts, t0, t1, k) => {
   return span ? sum / span : null;
 };
 
+// ═══ [2/6] CẤU HÌNH: BẢNG LUẬT KIỂM TRA, KHỞI TẠO, VÒNG ĐỜI ═══
+const T = {   // các "kiểu" giá trị dùng trong bảng luật bên dưới
+  bool: (v) => typeof v === 'boolean',
+  pos: (v) => typeof v === 'number' && v > 0,
+  int: (lo, hi = Infinity) => (v) => Number.isInteger(v) && v >= lo && v <= hi,
+  num: (lo, hi = Infinity) => (v) => typeof v === 'number' && v >= lo && v <= hi,
+  oneOf: (...a) => (v) => a.includes(v),
+};
+const BOOL_KEYS = ['style_toggle', 'hide_scrollbar', 'transparent', 'hide_idle', 'show_down_ports',
+  'link_labels', 'swap_rx_tx', 'layout_edit', 'show_zoom'];
+// [đường dẫn, hàm kiểm tra, thông báo lỗi]: chỉ kiểm tra khi giá trị khác null
+const RULES = [
+  ['isp.enabled', T.bool, 'isp.enabled phải là true hoặc false'],
+  ['pfsense.enabled', T.bool, 'pfsense.enabled phải là true hoặc false'],
+  ['max_ports', T.int(1), 'max_ports phải là số nguyên dương'],
+  ['height', (v) => v === 'auto' || T.num(100, 2000)(v), "height phải là số px từ 100 đến 2000, hoặc 'auto'"],
+  ['client_columns', T.int(1, 3), 'client_columns phải là số nguyên từ 1 đến 3'],
+  ['zoom', T.num(0.3, 1.6), 'zoom phải là số từ 0.3 đến 1.6'],
+  ['wheel_zoom', T.oneOf('ctrl', 'always'), "wheel_zoom phải là 'ctrl' hoặc 'always'"],
+  ['orientation', T.oneOf('horizontal', 'vertical'), "orientation phải là 'horizontal' hoặc 'vertical'"],
+  ['flow_style', T.oneOf('dash', 'galaxy'), "flow_style phải là 'dash' hoặc 'galaxy'"],
+  ['style', T.oneOf(...STYLES), "style phải là 'glass' hoặc 'neon'"],
+  ['sort_clients', T.oneOf('port', 'name', 'traffic'), "sort_clients phải là 'port', 'name' hoặc 'traffic'"],
+  ...BOOL_KEYS.map((k) => [k, T.bool, `${k} phải là true hoặc false`]),
+  ['node_blur', T.num(0, 12), 'node_blur phải là số từ 0 đến 12 (px)'],
+  ['node_opacity', T.num(0, 100), 'node_opacity phải là số từ 0 đến 100 (%)'],
+  ['blur', T.num(0, 20), 'blur phải là số từ 0 đến 20 (px)'],
+  ['active_threshold_bps', T.num(0), 'active_threshold_bps phải là số bps lớn hơn hoặc bằng 0'],
+  ['auto.mode', T.oneOf('single', 'multi'), "auto.mode phải là 'single' hoặc 'multi'"],
+  ['auto.count', T.int(1, 3), 'auto.count phải là số nguyên từ 1 đến 3'],
+  ['auto.interval', T.num(2, 60), 'auto.interval phải là số giây từ 2 đến 60'],
+  ['auto.skip_empty', T.bool, 'auto.skip_empty phải là true hoặc false'],
+  ['auto.pause_on_tap', T.num(0, 600), 'auto.pause_on_tap phải là số giây từ 0 đến 600'],
+  ['alerts.enabled', T.bool, 'alerts.enabled phải là true hoặc false'],
+  ['alerts.factor_warn', T.pos, 'alerts.factor_warn phải là số lớn hơn 0'],
+  ['alerts.factor_crit', T.pos, 'alerts.factor_crit phải là số lớn hơn 0'],
+  ...ALERT_TIERS.flatMap((t) => ['warn', 'crit'].map((k) =>
+    [`alerts.floors.${t}.${k}`, T.pos, `alerts.floors.${t}.${k} phải là số Mbps lớn hơn 0`])),
+];
+const ENTITY_PATHS = ['isp.status', 'isp.delay', 'isp.loss', 'wan.down', 'wan.up', 'pfsense.cpu', 'pfsense.ram',
+  'pfsense.states', 'speedtest.down', 'speedtest.up', 'speedtest.ping'];
+const STR_PATHS = ['isp.logo', 'isp.ip', 'pfsense.logo', 'pfsense.ip', 'core.name', 'core.ip', 'core.logo',
+  'switch_logo', 'layout_id', 'subtitle'];
+
+// Ném Error (thông báo tiếng Việt) nếu config sai; không sửa config
+function validateConfig(config) {
+  const bad = (m) => { throw new Error(m); };
+  if (!config || typeof config !== 'object') bad('Cấu hình card không hợp lệ');
+  const entity = (where, v) => {
+    for (const e of list(v)) {
+      if (typeof e !== 'string' || !ID_RE.test(e)) bad(`${where}: "${e}" không phải entity_id hợp lệ (ví dụ sensor.ten_entity)`);
+    }
+  };
+  const str = (where, v) => { if (v != null && typeof v !== 'string') bad(`${where} phải là chuỗi`); };
+  const port = (where, v) => {
+    if (v != null && typeof v !== 'string' && typeof v !== 'number') bad(`${where} phải là tên cổng (ví dụ Gi1/0/13)`);
+  };
+  const rows = (name, v, each) => {
+    if (v == null) return;
+    if (!Array.isArray(v)) bad(`${name} phải là một danh sách`);
+    v.forEach((r, i) => {
+      if (!isObj(r)) bad(`${name}[${i}] phải là một khối cấu hình`);
+      each(r, `${name}[${i}]`);
+    });
+  };
+  for (const p of ENTITY_PATHS) entity(p, getPath(config, p));
+  for (const p of STR_PATHS) str(p, getPath(config, p));
+
+  const C = config.core;
+  if (!isObj(C) || typeof C.switch !== 'string' || !C.switch.trim()) {
+    bad('core.switch là bắt buộc: tên switch lõi trong HA (ví dụ CORE-SW)');
+  }
+  list(C.ports).forEach((p) => port('core.ports', p));
+  rows('links', config.links, (L, w) => {
+    for (const k of ['parent', 'child', 'child_ip', 'logo']) str(`${w}.${k}`, L[k]);
+    for (const k of ['parent_port', 'child_port']) port(`${w}.${k}`, L[k]);
+    for (const k of ['down', 'up', 'status']) entity(`${w}.${k}`, L[k]);
+  });
+  rows('switches', config.switches, (S, w) => {
+    for (const k of ['name', 'model', 'ip', 'logo']) str(`${w}.${k}`, S[k]);
+    rows(`${w}.ports`, S.ports, (P, pw) => {   // cổng khai báo tay: rx / tx / status là MỘT entity mỗi ô
+      if (P.port == null || P.port === '') bad(`${pw}.port là bắt buộc (số hoặc tên cổng)`);
+      port(`${pw}.port`, P.port);
+      for (const k of ['name', 'ip', 'icon']) str(`${pw}.${k}`, P[k]);
+      for (const k of ['rx', 'tx', 'status']) {
+        if (Array.isArray(P[k])) bad(`${pw}.${k} phải là một entity_id`);
+        entity(`${pw}.${k}`, P[k]);
+      }
+    });
+  });
+  for (const p of list(config.platform)) {
+    if (typeof p !== 'string' || !p.trim()) bad('platform phải là tên integration (chuỗi) hoặc danh sách tên, ví dụ snmp_switch_manager');
+  }
+  if (config.port_names != null && !isObj(config.port_names)) bad('port_names phải là map {"switch:cổng": "tên | IP"}');
+  for (const k of ['auto', 'alerts']) if (config[k] != null && !isObj(config[k])) bad(`${k} phải là một khối cấu hình`);
+  for (const [p, ok, msg] of RULES) {
+    const v = getPath(config, p);
+    if (v != null && !ok(v)) bad(msg);
+  }
+  const A = config.alerts;
+  if (A) {   // crit phải ≥ warn (so với mặc định nếu một vế bỏ trống)
+    const pick = (o, k, d) => (o && o[k] != null ? o[k] : d);
+    if (pick(A, 'factor_crit', DEFAULT_ALERTS.factor_crit) < pick(A, 'factor_warn', DEFAULT_ALERTS.factor_warn)) {
+      bad('alerts.factor_crit phải lớn hơn hoặc bằng factor_warn');
+    }
+    for (const tier of ALERT_TIERS) {
+      const f = A.floors && A.floors[tier], d = DEFAULT_ALERTS.floors[tier];
+      if (f != null && pick(f, 'crit', d.crit) < pick(f, 'warn', d.warn)) bad(`alerts.floors.${tier}: crit phải lớn hơn hoặc bằng warn`);
+    }
+  }
+}
+
 // ───────────────────────── Card ─────────────────────────
 class SnmpTopoLanCard extends LitBase {
   static get properties() {
@@ -210,7 +391,7 @@ class SnmpTopoLanCard extends LitBase {
 
   constructor() {
     super();
-    this._selected = [];        // các AP đang chọn, theo thứ tự → cột client 1, 2, …
+    this._selected = [];        // các switch đang chọn, theo thứ tự → cột cổng 1, 2, …
     this._zoom = 1;
     this._style = 'glass';
     this._curCols = [];
@@ -224,10 +405,10 @@ class SnmpTopoLanCard extends LitBase {
     this._layoutLoaded = false;
     this._drag = null;
     this._geom = { minX: 0, w: 0 };
-    this._linkKey = '';
     this._paths = new Map();
     this._ro = null;
     this._obsEl = null;
+    this._obsSc = null;
     this._reg = null;           // cache registry
     this._loading = false;
     this._regAt = 0;
@@ -242,7 +423,7 @@ class SnmpTopoLanCard extends LitBase {
     this._baseVer = 0;
     this._autoOn = false;
     this._autoTimer = null;
-    this._autoIdx = 0;            // nhóm AP kế tiếp sẽ được mở
+    this._autoIdx = 0;            // nhóm switch kế tiếp sẽ được mở
     this._autoPausedUntil = 0;    // thời điểm (ms) auto chạy tiếp sau khi người dùng tự bấm
     this._fadeSeq = 0;
     this._hist = { down: [], up: [] }; // lịch sử tổng tốc độ cho đồ thị nhỏ (mỗi 5 giây, tối đa 60 điểm)
@@ -251,9 +432,21 @@ class SnmpTopoLanCard extends LitBase {
     this._q = '';
     this._svgEl = null;           // svg đang giữ các path (đổi svg → bỏ cache path)
     this._raf = 0;                // rAF gộp việc vẽ lại đường nối
-    this._io = null;              // IntersectionObserver: tạm dừng animation khi card ngoài màn hình
+    this._io = null;              // IntersectionObserver: tạm dừng animation / cập nhật chậm khi card ngoài màn hình
     this._regRetryAt = 0;         // lỗi registry → chờ tới mốc này mới thử lại
-    this._missing = new Map();    // tracker chưa có trong registry → thời điểm hết hạn bỏ qua (ms)
+    this._onScreen = true;        // false khi card ngoài màn hình (IntersectionObserver)
+    this._onVis = () => { if (!document.hidden) this._tick(); };   // tab hiện lại → cập nhật ngay
+    this._watch = null;           // entity_id liên quan tới card (cache; null = tính lại)
+    this._watchRefs = null;       // object state của các entity đó ở lần dựng trước (so sánh tham chiếu)
+    this._baseCheckAt = 0;
+    this._layoutSig = '';         // layout_id / title hiện tại: bố cục đã lưu chỉ nạp lại khi nó đổi
+    this._platKey = undefined;    // platform đang dùng: đổi thì nạp lại registry
+    this._zoomCfg = undefined;    // zoom trong config lần trước (chỉ khi nó đổi mới đặt lại mức zoom)
+    this._zoomId = undefined;     // layout_id / title lần trước (mỗi layout có mức zoom đã lưu riêng)
+    this._zsig = '';              // chữ ký những thứ ảnh hưởng kích thước sơ đồ (bỏ _applyZoom khi không đổi)
+    this._autoSeeded = false;     // đã mở nhóm switch đầu tiên cho lần bật auto này chưa
+    this._wheelAcc = 0;           // độ cuộn chuột chờ áp vào zoom (gộp mỗi frame)
+    this._wheelRaf = 0;
     this._badLogos = new Set();   // đường dẫn logo bị lỗi → dùng icon mdi
   }
 
@@ -266,9 +459,9 @@ class SnmpTopoLanCard extends LitBase {
       flow_style: 'dash',
       transparent: true,
       blur: 6,
-      isp: { name: 'Viettel' },
+      isp: { name: 'ISP' },
       pfsense: { name: 'pfSense' },
-      core: { switch: 'SW-CORE' },
+      core: { switch: 'CORE-SW' },
     };
   }
 
@@ -278,208 +471,142 @@ class SnmpTopoLanCard extends LitBase {
   // Sections view: 'full' ép card rộng đúng cả section (người dùng vẫn chỉnh được trong UI)
   getGridOptions() { return { columns: 'full', rows: 'auto', min_columns: 3 }; }
 
+  connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener('visibilitychange', this._onVis);
+    if (this.hasUpdated) this.requestUpdate(); // gắn lại ResizeObserver sau khi bị tháo
+    if (this._io) this._io.observe(this);
+    if (this._autoOn) this._autoStart();
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
+    document.removeEventListener('visibilitychange', this._onVis);
     clearTimeout(this._timer);
     this._timer = null;
     this._autoStop();
     if (this._ro) { this._ro.disconnect(); this._obsEl = null; this._obsSc = null; }
     if (this._io) this._io.disconnect();
     cancelAnimationFrame(this._raf);
+    cancelAnimationFrame(this._wheelRaf);
     this._raf = 0;
+    this._wheelRaf = 0;
+    this._wheelAcc = 0;
   }
 
-  // ── Config ──
-  setConfig(config) {
-    if (!config || typeof config !== 'object') throw new Error('Cấu hình card không hợp lệ');
-    const ID = /^[a-z_]+\.[a-z0-9_]+$/;
-    const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
-    const ids = (where, v) => {
-      for (const e of list(v)) {
-        if (typeof e !== 'string' || !ID.test(e)) {
-          throw new Error(`${where}: "${e}" không phải entity_id hợp lệ (ví dụ sensor.ten_entity)`);
-        }
-      }
-    };
-    const str = (where, v) => {
-      if (v != null && typeof v !== 'string') throw new Error(`${where} phải là chuỗi`);
-    };
-    const port = (where, v) => {
-      if (v != null && typeof v !== 'string' && typeof v !== 'number') throw new Error(`${where} phải là tên cổng (ví dụ Gi1/0/13)`);
-    };
-    for (const [sec, key] of [
-      ['isp', 'status'], ['isp', 'delay'], ['isp', 'loss'], ['wan', 'down'], ['wan', 'up'],
-      ['pfsense', 'cpu'], ['pfsense', 'ram'], ['pfsense', 'states'],
-      ['speedtest', 'down'], ['speedtest', 'up'], ['speedtest', 'ping'],
-    ]) ids(`${sec}.${key}`, config[sec] && config[sec][key]);
-    for (const sec of ['isp', 'pfsense']) {
-      str(`${sec}.logo`, config[sec] && config[sec].logo);
-      str(`${sec}.ip`, config[sec] && config[sec].ip);
-    }
+  firstUpdated() {
+    this._ro = new ResizeObserver(() => { this._applyZoom(); this._scheduleDraw(); });
+    // Card ngoài màn hình → thuộc tính `paused` trên host (CSS dừng animation) + cập nhật chậm lại;
+    // hiện lại thì cập nhật ngay.
+    this._io = new IntersectionObserver((es) => {
+      this._onScreen = es[es.length - 1].isIntersecting;
+      this.toggleAttribute('paused', !this._onScreen);
+      if (this._onScreen) this._tick();
+    });
+    this._io.observe(this);
+  }
 
-    const C = config.core;
-    if (!isObj(C) || typeof C.switch !== 'string' || !C.switch.trim()) {
-      throw new Error('core.switch là bắt buộc: tên switch lõi trong HA (ví dụ SW-CORE)');
+  updated() {
+    const tree = this.renderRoot.querySelector('.tree');
+    const sc = this.renderRoot.querySelector('.scroll');
+    if (this._ro && (tree !== this._obsEl || sc !== this._obsSc)) {
+      this._ro.disconnect();
+      if (tree) this._ro.observe(tree);
+      if (sc) this._ro.observe(sc);
+      this._obsEl = tree;
+      this._obsSc = sc;
     }
-    for (const k of ['name', 'ip', 'logo']) str(`core.${k}`, C[k]);
-    for (const p of list(C.ports)) port('core.ports', p);
+    // _applyZoom ghi style rồi đọc kích thước (ép layout): chỉ chạy khi thứ ảnh hưởng tới kích thước thật sự đổi.
+    // Kích thước đổi do nội dung thì ResizeObserver ở trên đã gọi lại.
+    const zs = this._zoomSig();
+    if (zs !== this._zsig) { this._zsig = zs; this._applyZoom(); }
+    this._scheduleDraw();
+  }
 
-    if (config.links != null) {
-      if (!Array.isArray(config.links)) throw new Error('links phải là một danh sách');
-      config.links.forEach((L, i) => {
-        if (!isObj(L)) throw new Error(`links[${i}] phải là một khối cấu hình`);
-        for (const k of ['parent', 'child', 'child_ip', 'logo']) str(`links[${i}].${k}`, L[k]);
-        for (const k of ['parent_port', 'child_port']) port(`links[${i}].${k}`, L[k]);
-        for (const k of ['down', 'up', 'status']) ids(`links[${i}].${k}`, L[k]);
-      });
-    }
-    if (config.switches != null) {
-      if (!Array.isArray(config.switches)) throw new Error('switches phải là một danh sách');
-      config.switches.forEach((S, i) => {
-        if (!isObj(S)) throw new Error(`switches[${i}] phải là một khối cấu hình`);
-        for (const k of ['name', 'model', 'ip', 'logo']) str(`switches[${i}].${k}`, S[k]);
-      });
-    }
-    if (config.port_names != null && !isObj(config.port_names)) {
-      throw new Error('port_names phải là map {"switch:cổng": "tên | IP"}');
-    }
-    str('switch_logo', config.switch_logo);
-    if (config.max_ports != null && !(Number.isInteger(config.max_ports) && config.max_ports > 0)) {
-      throw new Error('max_ports phải là số nguyên dương');
-    }
-    if (config.height != null && config.height !== 'auto' &&
-        !(typeof config.height === 'number' && config.height >= 100 && config.height <= 2000)) {
-      throw new Error("height phải là số px từ 100 đến 2000, hoặc 'auto'");
-    }
-    if (config.client_columns != null &&
-        !(Number.isInteger(config.client_columns) && config.client_columns >= 1 && config.client_columns <= 3)) {
-      throw new Error('client_columns phải là số nguyên từ 1 đến 3');
-    }
-    if (config.zoom != null && !(typeof config.zoom === 'number' && config.zoom >= 0.3 && config.zoom <= 1.6)) {
-      throw new Error('zoom phải là số từ 0.3 đến 1.6');
-    }
-    str('layout_id', config.layout_id);
-    str('subtitle', config.subtitle);
-    if (config.wheel_zoom != null && !['ctrl', 'always'].includes(config.wheel_zoom)) {
-      throw new Error("wheel_zoom phải là 'ctrl' hoặc 'always'");
-    }
-    if (config.orientation != null && !['horizontal', 'vertical'].includes(config.orientation)) {
-      throw new Error("orientation phải là 'horizontal' hoặc 'vertical'");
-    }
-    if (config.flow_style != null && !['dash', 'galaxy'].includes(config.flow_style)) {
-      throw new Error("flow_style phải là 'dash' hoặc 'galaxy'");
-    }
-    if (config.style != null && !STYLES.includes(config.style)) {
-      throw new Error("style phải là 'glass' hoặc 'neon'");
-    }
-    if (config.sort_clients != null && !['port', 'name', 'traffic'].includes(config.sort_clients)) {
-      throw new Error("sort_clients phải là 'port', 'name' hoặc 'traffic'");
-    }
-    for (const k of ['style_toggle', 'hide_scrollbar', 'transparent', 'hide_idle', 'show_down_ports',
-      'link_labels', 'swap_rx_tx', 'layout_edit', 'show_zoom']) {
-      if (config[k] != null && typeof config[k] !== 'boolean') throw new Error(`${k} phải là true hoặc false`);
-    }
-    if (config.node_blur != null && !(typeof config.node_blur === 'number' && config.node_blur >= 0 && config.node_blur <= 12)) {
-      throw new Error('node_blur phải là số từ 0 đến 12 (px)');
-    }
-    if (config.node_opacity != null && !(typeof config.node_opacity === 'number' && config.node_opacity >= 0 && config.node_opacity <= 100)) {
-      throw new Error('node_opacity phải là số từ 0 đến 100 (%)');
-    }
-    if (config.blur != null && !(typeof config.blur === 'number' && config.blur >= 0 && config.blur <= 20)) {
-      throw new Error('blur phải là số từ 0 đến 20 (px)');
-    }
-    if (config.active_threshold_bps != null &&
-        !(typeof config.active_threshold_bps === 'number' && config.active_threshold_bps >= 0)) {
-      throw new Error('active_threshold_bps phải là số bps lớn hơn hoặc bằng 0');
-    }
-    if (config.auto != null) {
-      const U = config.auto;
-      if (!isObj(U)) throw new Error('auto phải là một khối cấu hình');
-      if (U.mode != null && !['single', 'multi'].includes(U.mode)) throw new Error("auto.mode phải là 'single' hoặc 'multi'");
-      if (U.count != null && !(Number.isInteger(U.count) && U.count >= 1 && U.count <= 3)) throw new Error('auto.count phải là số nguyên từ 1 đến 3');
-      if (U.interval != null && !(typeof U.interval === 'number' && U.interval >= 2 && U.interval <= 60)) throw new Error('auto.interval phải là số giây từ 2 đến 60');
-      if (U.skip_empty != null && typeof U.skip_empty !== 'boolean') throw new Error('auto.skip_empty phải là true hoặc false');
-      if (U.pause_on_tap != null && !(typeof U.pause_on_tap === 'number' && U.pause_on_tap >= 0 && U.pause_on_tap <= 600)) throw new Error('auto.pause_on_tap phải là số giây từ 0 đến 600');
-    }
-    if (config.alerts != null) {
-      const A = config.alerts;
-      if (!isObj(A)) throw new Error('alerts phải là một khối cấu hình');
-      if (A.enabled != null && typeof A.enabled !== 'boolean') throw new Error('alerts.enabled phải là true hoặc false');
-      for (const k of ['factor_warn', 'factor_crit']) {
-        if (A[k] != null && !(typeof A[k] === 'number' && A[k] > 0)) throw new Error(`alerts.${k} phải là số lớn hơn 0`);
-      }
-      if ((A.factor_crit != null ? A.factor_crit : DEFAULT_ALERTS.factor_crit) <
-          (A.factor_warn != null ? A.factor_warn : DEFAULT_ALERTS.factor_warn)) {
-        throw new Error('alerts.factor_crit phải lớn hơn hoặc bằng factor_warn');
-      }
-      for (const tier of ALERT_TIERS) {
-        const f = A.floors && A.floors[tier];
-        if (f == null) continue;
-        for (const k of ['warn', 'crit']) {
-          if (f[k] != null && !(typeof f[k] === 'number' && f[k] > 0)) throw new Error(`alerts.floors.${tier}.${k} phải là số Mbps lớn hơn 0`);
-        }
-        const d = DEFAULT_ALERTS.floors[tier];
-        if ((f.crit != null ? f.crit : d.crit) < (f.warn != null ? f.warn : d.warn)) {
-          throw new Error(`alerts.floors.${tier}: crit phải lớn hơn hoặc bằng warn`);
-        }
-      }
-    }
-    this._config = {
-      orientation: 'horizontal',
-      flow_style: 'dash',
-      style: 'glass',          // glass | neon
-      style_toggle: true,      // hiện nút đổi giao diện ở header
-      hide_scrollbar: true,
-      subtitle: 'LAN Topology',
-      node_blur: 0,
-      node_opacity: 80,
-      transparent: true,
-      blur: 6,
-      max_ports: 24,               // số cổng tối đa hiện cho mỗi switch
-      sort_clients: 'port',        // 'port' (theo số cổng) | 'name' | 'traffic' (nhảy theo lưu lượng)
-      active_threshold_bps: 2000,  // dưới ngưỡng này đường nối đứng yên, không chạy animation
-      hide_idle: false,
-      show_down_ports: false,      // true: hiện cả cổng không có link
-      link_labels: true,           // nhãn ↓ ↑ trên đường nối giữa các switch
-      client_columns: 2,           // số switch mở danh sách cổng cùng lúc
-      show_zoom: true,
-      wheel_zoom: 'ctrl',
-      layout_edit: true,
-      swap_rx_tx: false,           // true nếu ↓ ↑ bị ngược chiều
-      exclude_switches: [],
-      exclude_ports: [],
-      port_names: {},
-      links: [],
-      switches: [],
-      ...config,
-    };
-    const A = config.alerts || {}, F = A.floors || {};
-    this._config.alerts = { ...DEFAULT_ALERTS, ...A, floors: {} };
-    for (const tier of ALERT_TIERS) this._config.alerts.floors[tier] = { ...DEFAULT_ALERTS.floors[tier], ...(F[tier] || {}) };
-    this._config.auto = { ...DEFAULT_AUTO, ...(config.auto || {}) };
-    this._style = this._resolveStyle();
-    this._zoom = config.zoom != null ? config.zoom : 1;
-    this._selected = this._selected.slice(-this._config.client_columns);
+  _zoomSig() {
+    const t = this._tree;
+    return [this._zoom, this._edit, this._vertical(), this._coreOpen, this._selected.join(),
+      JSON.stringify(this._lay()), JSON.stringify(this._off()),
+      t ? `${!!t.isp}${!!t.pf}${t.aps.map((a) => `${a.kids.length}.${a.hidden}`).join()}` : ''].join('|');
+  }
+
+  // Danh sách platform của integration nguồn (không có / rỗng → mặc định SNMP Switch Manager)
+  _platforms() {
+    const l = list(this._config && this._config.platform).map((p) => String(p).trim()).filter(Boolean);
+    return l.length ? l : ['snmp_switch_manager'];
+  }
+
+  _layoutId() {
+    const c = this._config;
+    return c.layout_id || c.title || 'default';
+  }
+
+  // Khoá lưu trữ chung cho bố cục / độ lệch / auto / switch lõi (mỗi hướng ngang / dọc lưu riêng)
+  _key(name, vert) { return `${CARD_TAG}:${name}${vert ? '_v' : ''}:${this._layoutId()}`; }
+
+  // Đổi layout_id / title → coi như card khác: bỏ bố cục đang giữ, nạp lại từ nơi lưu
+  _resetPersisted() {
     this._layoutLoaded = false;
-    this._sig = null;
-    if (this._autoOn) this._autoStart(); // áp dụng interval mới
-    if (this._hass) this._tick();
+    this._layout = clone(DEFAULT_LAYOUT);
+    this._layoutV = clone(DEFAULT_LAYOUT_V);
+    this._swOff = {};
+    this._swOffV = {};
+    this._coreOpen = false;
+    if (this._autoOn) { this._autoOn = false; this._autoStop(); }
+    this._autoSeeded = false;
   }
 
-  // ── Nhận hass: KHÔNG render mỗi lần hass đổi, chỉ tính lại tối đa 1 lần/giây ──
+  setConfig(config) {
+    validateConfig(config);
+    const cfg = { ...clone(DEFAULT_CONFIG), ...defined(config) };
+    const A = defined(config.alerts), F = isObj(A.floors) ? A.floors : {};
+    cfg.alerts = { ...clone(DEFAULT_ALERTS), ...A, floors: {} };
+    for (const tier of ALERT_TIERS) cfg.alerts.floors[tier] = { ...DEFAULT_ALERTS.floors[tier], ...defined(F[tier]) };
+    cfg.auto = { ...DEFAULT_AUTO, ...defined(config.auto) };
+    this._config = cfg;
+    this._style = this._resolveStyle();
+    // Mức zoom: lần đầu lấy mức đã lưu trên thiết bị này (nếu có), không thì lấy `zoom` trong config. Sửa option khác
+    // trong editor không đặt lại zoom đang dùng; đổi chính `zoom` (hoặc layout_id / title) thì dùng giá trị mới, bỏ mức đã lưu.
+    const zoomId = this._layoutId();
+    const first = this._zoomId === undefined, idChanged = !first && zoomId !== this._zoomId;
+    const zChanged = config.zoom !== this._zoomCfg;
+    if (first || idChanged || zChanged) {
+      if (zChanged && !first && !idChanged) this._saveZoom(null);   // người dùng đổi `zoom` trong config → config thắng
+      const saved = first || idChanged ? this._loadZoom() : null;
+      this._zoomCfg = config.zoom;
+      this._zoomId = zoomId;
+      this._zoom = saved != null ? saved : config.zoom != null ? config.zoom : 1;
+    }
+    this._selected = this._selected.slice(-cfg.client_columns);
+    const pk = this._platforms().join(',');
+    if (pk !== this._platKey) {
+      if (this._platKey !== undefined) { this._reg = null; this._regAt = 0; this._regRetryAt = 0; this._watch = null; this._tree = null; this._sig = null; }
+      this._platKey = pk;
+    }
+    const lid = this._layoutId();
+    if (lid !== this._layoutSig) { this._layoutSig = lid; this._resetPersisted(); }
+    this._sig = null;
+    this._watch = null;
+    if (this._autoOn) this._autoStart(); // áp dụng interval mới
+    if (this._hass) this._tick(true);
+  }
+
+  // ── Nhận hass: KHÔNG render mỗi lần hass đổi, chỉ kiểm tra tối đa 1 lần/giây (5 giây khi card ẩn) ──
   set hass(hass) {
     this._hass = hass;
-    const wait = 1000 - (Date.now() - this._last);
+    const wait = (this._slow() ? SLOW_TICK_MS : 1000) - (Date.now() - this._last);
     if (wait <= 0) this._tick();
     else if (!this._timer) {
       this._timer = setTimeout(() => { this._timer = null; this._tick(); }, wait);
     }
   }
 
+  // ═══ [3/6] DỮ LIỆU ═══
   // ── Tải registry một lần: gom entity của integration SNMP Switch Manager theo thiết bị (= switch) ──
   async _loadRegistries() {
     if (this._loading || !this._hass) return;
     this._loading = true;
+    const pk = this._platKey, plats = new Set(this._platforms());
     try {
       const [devs, ents] = await Promise.all([
         this._hass.callWS({ type: 'config/device_registry/list' }),
@@ -488,7 +615,7 @@ class SnmpTopoLanCard extends LitBase {
       const dev = new Map(devs.map((d) => [d.id, d]));
       const out = new Map();
       for (const e of ents) {
-        if (e.platform !== SNMP_PLATFORM || e.disabled_by || !e.device_id) continue;
+        if (!plats.has(e.platform) || e.disabled_by || !e.device_id) continue;
         let info = out.get(e.device_id);
         if (!info) {
           const d = dev.get(e.device_id) || {};
@@ -498,7 +625,7 @@ class SnmpTopoLanCard extends LitBase {
             if (!n) continue;
             const l = String(n).toLowerCase();
             names.add(l);
-            names.add(l.split('.')[0]);   // "sw-core.home.lan" → "sw-core"
+            names.add(l.split('.')[0]);   // "core-sw.example.lan" → "core-sw"
           }
           info = {
             id: e.device_id, model: d.model || '', names: [...names], ents: [],
@@ -508,17 +635,21 @@ class SnmpTopoLanCard extends LitBase {
         }
         info.ents.push(e.entity_id);
       }
-      this._reg = { devs: out };
-      this._error = null;
+      if (pk === this._platKey) {   // platform đổi trong lúc đang nạp → bỏ kết quả cũ, nạp lại ở cuối hàm
+        this._reg = { devs: out };
+        this._regAt = Date.now();   // chỉ tính khi nạp thành công: lỗi thì thử lại sau 30 giây, không phải 10 phút
+        this._watch = null;
+        this._error = null;
+      }
     } catch (err) {
       this._error = `Không đọc được registry của HA: ${(err && err.message) || err}`;
       this._regRetryAt = Date.now() + 30000; // lỗi → chờ 30 giây rồi mới thử lại
       console.warn(`[${CARD_TAG}]`, this._error);
     } finally {
       this._loading = false;
-      this._regAt = Date.now();
     }
-    if (this._reg) this._tick();
+    if (pk !== this._platKey) this._tick(true);   // nạp lại với platform mới
+    else if (this._reg) this._tick(true);
   }
 
   // ── Dựng cây dữ liệu (thuần dữ liệu, không đụng DOM) ──
@@ -545,6 +676,20 @@ class SnmpTopoLanCard extends LitBase {
       return ok.includes(String(s.state).toLowerCase()) ? 'ok' : 'bad';
     };
     const operStat = (id) => stat(id, ['1', 'up', 'on', 'online', 'true']);   // ifOperStatus: 1 = up, 2 = down
+    // Mất kết nối = entity không còn trong HA hoặc đang "unavailable" ("unknown" là bình thường lúc mới khởi động)
+    const gone = (id) => { const s = st(id); return !s || s.state === 'unavailable'; };
+    const labelOf = (id) => { const a = (st(id) || {}).attributes; return (a && a.friendly_name) || id; };
+    // Node có entity mất kết nối → viền / chấm đỏ + dòng "⚠ mất kết nối: tên +N"; entity có lại thì tự hết cảnh báo
+    const applyLost = (n, ids) => {
+      const lost = [...new Set(list(ids).filter(Boolean))].filter(gone);
+      if (lost.length) {
+        n.status = 'bad';
+        n.lost = lost;
+        n.warn = `⚠ mất kết nối: ${labelOf(lost[0])}${lost.length > 1 ? ` +${lost.length - 1}` : ''}`;
+        n.tip = join(n.tip, `Mất kết nối: ${lost.map(labelOf).join(', ')}`);
+      }
+      return n;
+    };
     const pr = (p, parentSide) => {   // [down, up] của một cổng (bit/s)
       const rx = p.rx ? Math.max(0, toBps(st(p.rx)) || 0) : 0;
       const tx = p.tx ? Math.max(0, toBps(st(p.tx)) || 0) : 0;
@@ -599,11 +744,26 @@ class SnmpTopoLanCard extends LitBase {
       }
       sws.push({ key: info.id, name: info.name, model: info.model, names: info.names, ports, manual: false });
     }
-    // Switch thêm tay (không có trong integration, ví dụ SG2210P dùng sensor YAML)
+    // Switch thêm tay (không có trong integration, ví dụ switch chỉ có sensor YAML)
     for (const m of list(c.switches)) {
       if (!m || !m.name || exSw.has(String(m.name).toLowerCase())) continue;
       const nm = String(m.name);
-      sws.push({ key: `m:${nm}`, name: nm, model: m.model || '', ip: m.ip || '', logo: m.logo, names: [nm.toLowerCase()], ports: new Map(), manual: true });
+      // Cổng khai báo tay: trạng thái từ entity `status` (on / up / 1 = up), tốc độ từ sensor rx / tx (mọi đơn vị trong UNIT_TO_BPS)
+      const ports = new Map();
+      list(m.ports).forEach((pc, i) => {
+        if (!isObj(pc)) return;
+        const n = Number(pc.port), isNum = pc.port !== '' && Number.isFinite(n);
+        let idx = isNum ? n : i + 1;
+        while (ports.has(idx)) idx += 1000;
+        const sv = pc.status && st(pc.status) ? String(st(pc.status).state).toLowerCase() : '';
+        ports.set(idx, {
+          idx, name: isNum ? `Port ${pc.port}` : String(pc.port), alias: String(pc.name || ''),
+          oper: ['on', 'up', '1', 'true', 'connected', 'online'].includes(sv) ? 'up'
+            : ['off', 'down', '0', 'false', 'disconnected', 'offline'].includes(sv) ? 'down' : '',
+          speed: '', type: '', rx: pc.rx, tx: pc.tx, sw: pc.status, ip: pc.ip, icon: pc.icon,
+        });
+      });
+      sws.push({ key: `m:${nm}`, name: nm, model: m.model || '', ip: m.ip || '', logo: m.logo, names: [nm.toLowerCase()], ports, manual: true });
     }
     const findSw = (n) => {
       const k = String(n == null ? '' : n).toLowerCase();
@@ -655,6 +815,7 @@ class SnmpTopoLanCard extends LitBase {
       down: cGot ? cd : null, up: cGot ? cu : null,
       ids: corePorts.flatMap((p) => [p.rx, p.tx]).filter(Boolean),
       status: corePorts.length && corePorts.every((p) => p.oper && p.oper !== 'up') ? 'bad' : 'ok',
+      lostIds: corePorts.flatMap((p) => [p.rx, p.tx, p.sw]).filter(Boolean),   // sensor LAN + trạng thái cổng lên pfSense
     };
 
     // 3) Đường nối switch cha → switch con
@@ -679,7 +840,10 @@ class SnmpTopoLanCard extends LitBase {
       let status = 'ok';
       if (L.status) status = operStat(L.status);
       else if ((pp && pp.oper && pp.oper !== 'up') || (cp && cp.oper && cp.oper !== 'up')) status = 'bad';
-      ls.push({ parent: Pn, child: Cn, lk: { down, up, status, ids: ids.filter(Boolean), statusId: L.status, logo: L.logo } });
+      ls.push({ parent: Pn, child: Cn, lk: {
+        down, up, status, ids: ids.filter(Boolean), statusId: L.status, logo: L.logo,
+        lostIds: [...ids, L.status, pp && pp.sw, cp && cp.sw].filter(Boolean),
+      } });
     }
 
     // 4) Cổng có thiết bị của từng switch + node
@@ -691,6 +855,8 @@ class SnmpTopoLanCard extends LitBase {
         if (p.type && p.type !== 'physical') continue;
         const np = normPort(p.name);
         if (!np || ex.has(np) || exPort.has(np) || s.names.some((n) => exPort.has(`${n}:${np}`))) continue;
+        // Cổng khai báo tay có tên "Port 3": cho phép ẩn bằng số cổng ("3" hoặc "gs108pe:3")
+        if (s.manual && (exPort.has(String(p.idx)) || s.names.some((n) => exPort.has(`${n}:${p.idx}`)))) continue;
         const [down, up] = pr(p, true);
         const isUp = p.oper ? p.oper === 'up' : down + up > thr;
         known++;
@@ -700,11 +866,11 @@ class SnmpTopoLanCard extends LitBase {
         const ov = parseNm(nameOf(s, p));
         const al = p.alias && !isDefaultAlias(p.alias, p.name) ? splitAlias(p.alias) : { name: '', ip: '' };
         const label = (ov && ov.name) || al.name || p.name || `#${p.idx}`;
-        const ip = (ov && ov.ip) || al.ip;
+        const ip = (ov && ov.ip) || al.ip || p.ip || '';
         const spd = /^(disconnected|unknown|none|n\/a)?$/i.test(p.speed || '') ? '' : p.speed;
         out.push({
           id: `p:${s.key}:${p.idx}`, entity: p.rx || p.sw, label, idx: p.idx,
-          icon: (ov && ov.icon) || portIcon(`${label} ${p.alias || ''}`),
+          icon: (ov && ov.icon) || p.icon || portIcon(`${label} ${p.alias || ''}`),
           down, up, status: isUp ? 'ok' : 'unk', tier: 'port',
           subs: [ip],                                            // dòng 2 chỉ hiện IP
           tip: join(label !== p.name ? p.name : '', spd),        // tên cổng / tốc độ link: chỉ hiện khi rê chuột
@@ -728,20 +894,24 @@ class SnmpTopoLanCard extends LitBase {
       let status = s.manual ? (lk ? lk.status : 'ok') : alive ? 'ok' : 'bad';
       if (!s.manual && lnk && lnk.status === 'bad') status = 'bad';
       const upN = all.filter((k) => k.status === 'ok').length;
-      return {
+      const node = {
         id: isCore ? 'ctrl' : `sw:${s.key}`,
-        apId: s.manual ? undefined : isCore ? 'core' : s.key,   // có danh sách cổng → bấm để mở
+        apId: s.manual && !s.ports.size ? undefined : isCore ? 'core' : s.key,   // có danh sách cổng → bấm để mở
         label: isCore ? (C.name || s.name) : s.name,
         icon: isCore ? 'mdi:router-network' : 'mdi:lan-connect',
         logo: isCore ? C.logo : (lk && lk.logo) || s.logo || c.switch_logo,
         entity: s.manual && lk ? lk.statusId : undefined,
         status, tier: isCore ? 'infra' : 'sw',
         subs: [s.ip || ''],                                      // dòng 2 chỉ hiện IP
-        tip: join(s.model, s.manual ? '' : `${upN} cổng đang up`), // model / số cổng up: chỉ hiện khi rê chuột
+        tip: join(s.model, s.manual && !s.ports.size ? '' : `${upN} cổng đang up`), // model / số cổng up: chỉ hiện khi rê chuột
         down: lnk ? lnk.down : null, up: lnk ? lnk.up : null,
         bGroups: [lnk && lnk.ids ? lnk.ids : [], all.flatMap((k) => k.bGroups[0])].filter((x) => x.length),
         kids: shown, hidden: Math.max(0, kids.length - c.max_ports),
       };
+      // Switch khai báo tay có cổng: mất toàn bộ entity cổng (integration nguồn chết) → cảnh báo mất kết nối
+      const portIds = s.manual ? [...s.ports.values()].flatMap((p) => [p.rx, p.tx, p.sw]).filter(Boolean) : [];
+      const portLost = portIds.length && portIds.every(gone) ? portIds : [];
+      return applyLost(node, [...((lnk && lnk.lostIds) || []), ...portLost]);
     };
 
     const ctrl = core ? nodeOf(core, true, null) : {
@@ -781,8 +951,9 @@ class SnmpTopoLanCard extends LitBase {
     });
 
     // 6) Các node phía trên (chỉ hiện nếu có khai báo trong config)
-    const I = c.isp, P = c.pfsense;
-    // Dòng 2 của ISP / pfSense: IP lấy từ entity (ví dụ sensor.wan_public_ip) hoặc ghi cố định (ví dụ 192.168.1.x)
+    const I = c.isp && c.isp.enabled !== false ? c.isp : null;       // `enabled: false` → tắt node nhưng giữ cấu hình
+    const P = c.pfsense && c.pfsense.enabled !== false ? c.pfsense : null;
+    // Dòng 2 của ISP / pfSense: IP lấy từ entity (ví dụ sensor.wan_public_ip) hoặc ghi cố định (ví dụ 192.0.2.1)
     const ipOf = (v) => {
       if (v == null || v === '') return '';
       const t = String(v);
@@ -812,15 +983,21 @@ class SnmpTopoLanCard extends LitBase {
     const wanCfg = list(c.wan && c.wan.down).length + list(c.wan && c.wan.up).length;
     const wan = { down: wanD, up: wanU, status: wanCfg && wanD == null && wanU == null ? 'bad' : 'ok' };
     const lan = { down: coreUp.down, up: coreUp.up, status: coreUp.status };   // pfSense → switch lõi
+    // Không có pfSense: ISP nối thẳng vào switch lõi. Tốc độ đường này lấy từ sensor `wan` nếu có, không thì từ `core.ports`.
+    const direct = !!isp && !pf, viaCore = direct && !wanCfg;
+    const ispLink = viaCore ? lan : wan;
 
     // Tầng hạ tầng: ISP theo đường WAN, pfSense theo đường lớn hơn (switch lõi đã có rate riêng ở nodeOf)
-    const wanR = (wan.down || 0) + (wan.up || 0), lanR = (lan.down || 0) + (lan.up || 0);
-    const wanIds = [...list(c.wan && c.wan.down), ...list(c.wan && c.wan.up)];
+    const wanR = (ispLink.down || 0) + (ispLink.up || 0), lanR = (lan.down || 0) + (lan.up || 0);
+    const wanIds = viaCore ? coreUp.ids : [...list(c.wan && c.wan.down), ...list(c.wan && c.wan.up)];
     const hubAlert = (n, rate, groups) => {
       if (n) { n.tier = 'infra'; n.rate = rate; n.bGroups = groups.filter((x) => x.length); }
     };
     hubAlert(isp, wanR, [wanIds]);
     hubAlert(pf, Math.max(wanR, lanR), [wanIds, coreUp.ids]);
+    // Mất kết nối: ISP (status / delay / loss + sensor WAN), pfSense (CPU / RAM / state). Bấm node → more-info entity bị mất.
+    if (isp) { applyLost(isp, [I.status, I.delay, I.loss, ...wanIds]); if (isp.lost) isp.entity = isp.lost[0]; }
+    if (pf) { applyLost(pf, [P.cpu, P.ram, P.states]); if (pf.lost) pf.entity = pf.lost[0]; }
 
     // Speedtest: kết quả lần đo gần nhất của sensor (down / up thường là Mbit/s, ping là ms)
     const SP = c.speedtest || {};
@@ -832,7 +1009,7 @@ class SnmpTopoLanCard extends LitBase {
     const clean = (n) => n && { ...n, hub: true, subs: n.subs.filter(Boolean) };
     return {
       tree: {
-        isp: clean(isp), pf: clean(pf), ctrl: clean(ctrl), wan, lan, aps,
+        isp: clean(isp), pf: clean(pf), ctrl: clean(ctrl), wan: ispLink, lan, aps,
         found: sws.length,
         totals: { online, known, down: tDown, up: tUp, speed },
       },
@@ -845,9 +1022,9 @@ class SnmpTopoLanCard extends LitBase {
   // Trung bình hôm qua của node = tổng các sensor trong nhóm; node có 2 nhóm (pfSense) lấy nhóm lớn hơn
   _baselineOf(n) {
     let best = null;
-    for (const g of n.bGroups || []) {
+    for (const grp of n.bGroups || []) {
       let sum = 0, got = false;
-      for (const id of g) {
+      for (const id of grp) {
         const v = this._base.get(id);
         if (v != null) { sum += v; got = true; }
       }
@@ -872,6 +1049,7 @@ class SnmpTopoLanCard extends LitBase {
   async _ensureBaseline() {
     const A = this._config && this._config.alerts, t = this._tree;
     if (!A || !A.enabled || !t || !this._hass || this._baseLoading || Date.now() < this._baseRetryAt) return;
+    this._baseRetryAt = 0;
     const day = this._dayKey(), key = `${CARD_TAG}:base:${day}`;
     if (day !== this._baseDay) {
       this._baseDay = day;
@@ -879,12 +1057,13 @@ class SnmpTopoLanCard extends LitBase {
       this._baseTried = new Set();
       try {
         const c = JSON.parse(localStorage.getItem(key));
-        if (c && typeof c === 'object') for (const [id, v] of Object.entries(c)) { this._base.set(id, v); this._baseTried.add(id); }
+        // Giá trị null (từ bản cũ ghi nhầm khi sensor chưa có state) bỏ qua để thử lại, không coi là đã có baseline
+        if (c && typeof c === 'object') for (const [id, v] of Object.entries(c)) if (v != null) { this._base.set(id, v); this._baseTried.add(id); }
       } catch (e) { /* bỏ qua */ }
     }
     const want = new Set();
     for (const n of [t.isp, t.pf, t.ctrl, ...t.aps]) {
-      for (const g of (n && n.bGroups) || []) g.forEach((id) => want.add(id));
+      for (const grp of (n && n.bGroups) || []) grp.forEach((id) => want.add(id));
     }
     const need = [...want].filter((id) => !this._baseTried.has(id));
     if (!need.length) return;
@@ -909,6 +1088,7 @@ class SnmpTopoLanCard extends LitBase {
   }
 
   // Ưu tiên thống kê theo giờ (nhẹ); sensor không có thống kê thì đọc lịch sử trạng thái.
+  // Trả về các id lỗi TẠM THỜI (chưa có state, gọi WS lỗi): không lưu, thử lại sau.
   async _fetchBaseline(ids) {
     const h = this._hass;
     const failed = new Set();
@@ -919,8 +1099,15 @@ class SnmpTopoLanCard extends LitBase {
       const st = h.states[id];
       return UNIT_TO_BPS[st && st.attributes && st.attributes.unit_of_measurement];
     };
-    const known = ids.filter((id) => kOf(id));
-    for (const id of ids) if (!kOf(id)) this._base.set(id, null); // không rõ đơn vị → bỏ qua
+    const known = [];
+    for (const id of ids) {
+      if (kOf(id)) known.push(id);
+      else {
+        const st = h.states[id];
+        // Chưa có state / unavailable (lúc HA vừa khởi động, mất đơn vị) → thử lại sau; có state mà đơn vị lạ → bỏ hẳn
+        if (!st || BAD_STATES.includes(st.state)) failed.add(id); else this._base.set(id, null);
+      }
+    }
     for (let i = 0; i < known.length; i += 30) {
       const chunk = known.slice(i, i + 30);
       let stats = {};
@@ -955,41 +1142,95 @@ class SnmpTopoLanCard extends LitBase {
     return failed;
   }
 
-  // ── Mỗi nhịp: chỉ cập nhật _tree (→ render) khi dữ liệu thực sự đổi ──
-  _tick() {
-    this._last = Date.now();
+  // ── Nhịp cập nhật ──
+  // Card ngoài màn hình / tab ẩn: chỉ cập nhật mỗi SLOW_TICK_MS (hiện lại thì cập nhật ngay, xem firstUpdated / _onVis)
+  _slow() { return !this._onScreen || document.hidden; }
+
+  // Mọi entity_id mà cây dữ liệu phụ thuộc: entity khai báo trong config + entity của integration SNMP
+  _collectWatch() {
+    const out = new Set();
+    const walk = (v) => {
+      if (typeof v === 'string') { if (ID_RE.test(v)) out.add(v); }
+      else if (Array.isArray(v)) v.forEach(walk);
+      else if (isObj(v)) Object.values(v).forEach(walk);
+    };
+    walk(this._config);
+    if (this._reg) for (const d of this._reg.devs.values()) d.ents.forEach((id) => out.add(id));
+    return [...out];
+  }
+
+  // HA tạo object state mới mỗi khi một entity đổi → so sánh tham chiếu là đủ, không cần dựng cây để biết có đổi hay không
+  _statesChanged() {
+    const states = this._hass.states;
+    if (!this._watch) this._watch = this._collectWatch();
+    const ids = this._watch, prev = this._watchRefs;
+    const next = new Array(ids.length);
+    let diff = !prev || prev.length !== ids.length;
+    for (let i = 0; i < ids.length; i++) {
+      next[i] = states[ids[i]];
+      if (!diff && next[i] !== prev[i]) diff = true;
+    }
+    this._watchRefs = next;
+    return diff;
+  }
+
+  // Đồ thị nhỏ ở header: mỗi 5 giây một điểm, chỉ khi card đang hiện
+  _pushHist(now) {
+    if (now - this._histAt < 5000 || this._slow() || !this._tree) return;
+    this._histAt = now;
+    const T = this._tree.totals;
+    let moved = false;
+    for (const [k, v] of [['down', T.down], ['up', T.up]]) {
+      const a = this._hist[k];
+      if (a[a.length - 1] !== v) moved = true;
+      a.push(v);
+      if (a.length > 60) a.shift();
+    }
+    if (moved) this.requestUpdate();   // _hist không phải state → tự yêu cầu vẽ lại khi đồ thị thật sự đổi
+  }
+
+  // ── Mỗi nhịp: chỉ dựng lại cây khi entity liên quan đổi (hoặc force), chỉ render khi cây thật sự đổi ──
+  _tick(force = false) {
+    const now = Date.now();
+    this._last = now;
     if (!this._hass || !this._config) return;
     if (!this._layoutLoaded) this._loadLayout();
     if (!this._reg) {
-      if (Date.now() >= this._regRetryAt) this._loadRegistries();
+      if (now >= this._regRetryAt) this._loadRegistries();
       return;
     }
-    // Có switch / cổng mới sau khi HA đã chạy → nạp lại registry mỗi 10 phút
-    if (!this._loading && Date.now() - this._regAt > 600000) this._loadRegistries();
-    const { tree } = this._build();
-    const now = Date.now();
-    if (now - this._histAt >= 5000) {
-      this._histAt = now;
-      for (const [k, v] of [['down', tree.totals.down], ['up', tree.totals.up]]) {
-        this._hist[k].push(v);
-        if (this._hist[k].length > 60) this._hist[k].shift();
-      }
+    // Có switch / cổng mới sau khi HA đã chạy → nạp lại registry
+    if (!this._loading && now - this._regAt > REG_REFRESH_MS && now >= this._regRetryAt) this._loadRegistries();
+    const changed = this._statesChanged() || force;   // luôn gọi _statesChanged để cập nhật mốc so sánh
+    let treeChanged = false;
+    if (changed) {
+      const { tree } = this._build();
+      const sig = JSON.stringify(tree);
+      if (sig !== this._sig) { this._sig = sig; this._tree = tree; treeChanged = true; }
     }
-    const sig = JSON.stringify(tree);
-    if (sig !== this._sig) { this._sig = sig; this._tree = tree; }
-    this._ensureBaseline();
-    if (this._autoOn && !this._selected.length) this._autoAdvance();
+    this._pushHist(now);
+    // Baseline: khi cây đổi, tới hạn thử lại, hoặc mỗi phút một lần (để sang ngày mới thì lấy lại)
+    if (treeChanged || (this._baseRetryAt && now >= this._baseRetryAt) || now - this._baseCheckAt > 60000) {
+      this._baseCheckAt = now;
+      this._ensureBaseline();
+    }
+    // Lần bật auto đầu tiên (nạp từ bộ nhớ): mở nhóm switch đầu. Chỉ một lần: sau đó người dùng đóng hết
+    // switch thì auto KHÔNG tự chọn lại ngay (pause_on_tap có tác dụng), đợi tới nhịp xoay kế tiếp.
+    if (this._autoOn && !this._autoSeeded && this._tree) {
+      this._autoSeeded = true;
+      if (!this._selected.length) this._autoAdvance();
+    }
   }
 
-  // ── Tương tác ──
-  // Chạm AP → chọn/bỏ chọn; mỗi AP đang chọn có một cột client (theo thứ tự chọn).
-  // Vượt quá client_columns thì AP chọn sớm nhất bị đóng.
+  // ═══ [4/6] TƯƠNG TÁC ═══
+  // Chạm switch → chọn/bỏ chọn; mỗi switch đang chọn có một cột cổng (theo thứ tự chọn).
+  // Vượt quá client_columns thì switch chọn sớm nhất bị đóng.
   _tap(n) {
     if (this._noTap) return;         // vừa kéo xong: không chọn / bỏ chọn
     if (n.hub && this._edit) return; // đang sắp xếp: kéo thả, không mở more-info
     if (n.apId === 'core') {   // switch lõi: mở / đóng riêng, không tính vào client_columns, không bị auto / tìm kiếm đụng tới
       this._coreOpen = !this._coreOpen;
-      this._writeKey(this._coreKey(), { open: this._coreOpen });
+      this._writeKey(this._key('core'), { open: this._coreOpen });
     } else if (n.apId) {
       if (this._autoOn && this._config.auto.pause_on_tap > 0) {
         this._autoPausedUntil = Date.now() + this._config.auto.pause_on_tap * 1000;
@@ -1002,18 +1243,25 @@ class SnmpTopoLanCard extends LitBase {
         while (s.length > this._config.client_columns) s.shift();
       }
       this._selected = s;
-    } else if (n.entity) {
-      this.dispatchEvent(new CustomEvent('hass-more-info', {
-        detail: { entityId: n.entity }, bubbles: true, composed: true,
-      }));
-    }
+    } else if (n.entity) this._moreInfo(n.entity);   // ISP / pfSense: entity bị mất kết nối (nếu có) hoặc entity chính
+  }
+
+  _moreInfo(entityId) {
+    this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId }, bubbles: true, composed: true }));
+  }
+
+  // Bấm dòng "⚠ mất kết nối" trên bất kỳ node nào (kể cả switch, vì bấm vào node chỉ mở / đóng cột cổng)
+  _warnTap(e, n) {
+    e.stopPropagation();
+    if (this._noTap || this._edit || !n.lost) return;
+    this._moreInfo(n.lost[0]);
   }
 
   _cols() {
     const t = this._tree;
     if (!t) return [];
     const cols = this._selected.map((id) => t.aps.find((a) => a.apId === id)).filter(Boolean);
-    // Chế độ dọc: tất cả client nằm chung 1 hàng, nhóm nào đứng cạnh AP nào thì xếp theo đúng thứ tự AP
+    // Chế độ dọc: tất cả cột cổng nằm chung 1 hàng, xếp theo đúng thứ tự switch
     if (this._vertical()) cols.sort((a, b) => t.aps.indexOf(a) - t.aps.indexOf(b));
     return cols;
   }
@@ -1021,6 +1269,24 @@ class SnmpTopoLanCard extends LitBase {
   // ── Zoom ──
   _setZoom(z) {
     this._zoom = Math.round(Math.min(1.6, Math.max(0.3, z)) * 100) / 100;
+    this._saveZoom(this._zoom);
+  }
+
+  // Mức zoom lưu RIÊNG TỪNG THIẾT BỊ (localStorage, không đồng bộ qua HA) nên điện thoại và máy tính nhớ mức khác nhau
+  _zoomKey() { return `${CARD_TAG}:zoom:${this._layoutId()}`; }
+
+  _loadZoom() {
+    try {
+      const v = parseFloat(localStorage.getItem(this._zoomKey()));
+      return Number.isFinite(v) ? clamp(v, 0.3, 1.6) : null;
+    } catch (e) { return null; }
+  }
+
+  _saveZoom(v) {
+    try {
+      if (v == null) localStorage.removeItem(this._zoomKey());
+      else localStorage.setItem(this._zoomKey(), String(v));
+    } catch (e) { /* bỏ qua */ }
   }
 
   // Chiều cao cố định (px) nếu cấu hình height là số, ngược lại 0 = tự giãn theo nội dung
@@ -1050,34 +1316,43 @@ class SnmpTopoLanCard extends LitBase {
   _wheel(e) {
     if (this._config.wheel_zoom !== 'always' && !e.ctrlKey) return;
     e.preventDefault();
-    this._setZoom(this._zoom + Math.max(-0.1, Math.min(0.1, -e.deltaY * 0.002)));
+    // Gộp mọi sự kiện cuộn trong cùng một frame thành một lần đổi zoom (một lần render)
+    this._wheelAcc += Math.max(-0.1, Math.min(0.1, -e.deltaY * 0.002));
+    if (this._wheelRaf) return;
+    this._wheelRaf = requestAnimationFrame(() => {
+      this._wheelRaf = 0;
+      const d = this._wheelAcc;
+      this._wheelAcc = 0;
+      this._setZoom(this._zoom + d);
+    });
   }
 
   // scale() không đổi kích thước layout → đặt lại kích thước khung bọc theo tỉ lệ zoom.
   // Chế độ dọc: cây tối thiểu bằng bề rộng khung (để các hàng căn giữa), hàng nào dài hơn
   // thì cây rộng ra và cuộn ngang. Chế độ ngang: giữ kích thước tự nhiên, không giãn
-  // (trừ khi đang sắp xếp, xem bên dưới).
+  // (trừ khi đang sắp xếp, xem bên dưới). Chỉ ghi style khi giá trị đổi để không làm layout bẩn vô ích.
   _applyZoom() {
     const sc = this.renderRoot.querySelector('.scroll');
     const tree = this.renderRoot.querySelector('.tree');
     const wrap = this.renderRoot.querySelector('.zwrap');
     if (!sc || !tree || !wrap) return;
     const z = this._zoom;
-    tree.style.transform = z === 1 ? '' : `scale(${z})`;
-    tree.style.width = '';
+    const put = (el, k, v) => { if (el.style[k] !== v) el.style[k] = v; };
+    put(tree, 'transform', z === 1 ? '' : `scale(${z})`);
+    put(tree, 'width', '');
     // Chế độ sắp xếp: cây phủ kín khung nhìn để lớp .canvas (vùng kéo thả) rộng / cao bằng card.
     // height cố định → cao đúng phần khung còn lại sau header; height auto → tối thiểu EDIT_MIN_H.
     const fill = this._edit || this._vertical();
     const minW = fill && sc.clientWidth ? sc.clientWidth / z : 0;
     const minH = !this._edit ? 0 : this._fixedHeight() ? Math.max(0, sc.clientHeight - 8) / z : EDIT_MIN_H;
-    tree.style.minWidth = minW ? `${minW}px` : '';
-    tree.style.minHeight = minH ? `${minH}px` : '';
+    put(tree, 'minWidth', minW ? `${minW}px` : '');
+    put(tree, 'minHeight', minH ? `${minH}px` : '');
     // Cột switch lõi nằm ngoài luồng: nới cây ra cho vừa nó (kể cả khi bị kéo đi xa)
     const ext = this._coreExtent(tree);
-    if (ext.r > tree.offsetWidth) tree.style.minWidth = `${Math.ceil(ext.r) + 4}px`;
-    if (ext.b > tree.offsetHeight) tree.style.minHeight = `${Math.ceil(ext.b) + 4}px`;
-    wrap.style.width = `${tree.offsetWidth * z}px`;
-    wrap.style.height = `${tree.offsetHeight * z}px`;
+    if (ext.r > tree.offsetWidth) put(tree, 'minWidth', `${Math.ceil(ext.r) + 4}px`);
+    if (ext.b > tree.offsetHeight) put(tree, 'minHeight', `${Math.ceil(ext.b) + 4}px`);
+    put(wrap, 'width', `${tree.offsetWidth * z}px`);
+    put(wrap, 'height', `${tree.offsetHeight * z}px`);
   }
 
   // ── Bố cục 3 node đầu: kéo thả + lưu ──
@@ -1088,9 +1363,15 @@ class SnmpTopoLanCard extends LitBase {
   // Bố cục đang dùng theo hướng hiện tại (mỗi hướng lưu riêng)
   _lay() { return this._vertical() ? this._layoutV : this._layout; }
 
-  _layoutKey(vert) {
-    const c = this._config;
-    return `${CARD_TAG}:layout${vert ? '_v' : ''}:${c.layout_id || c.title || 'default'}`;
+  // Vị trí đang hiển thị của một node hub. Không có pfSense mà switch lõi chưa bị kéo đi đâu → nó lấy chỗ của pfSense
+  // (không để hở một khoảng trống giữa ISP và switch lõi).
+  _hubPos(id) {
+    const L = this._lay()[id];
+    if (id === 'ctrl' && this._tree && !this._tree.pf) {
+      const D = this._vertical() ? DEFAULT_LAYOUT_V : DEFAULT_LAYOUT, C = D.ctrl;
+      if (L.x === C.x && L.dy === C.dy && L.dx === C.dx && L.y === C.y) return D.pf;
+    }
+    return L;
   }
 
   _sanitizeLayout(v, vert) {
@@ -1107,32 +1388,24 @@ class SnmpTopoLanCard extends LitBase {
     return out;
   }
 
-  async _readLayout(vert) {
-    const key = this._layoutKey(vert);
-    let v = null;
-    try {
-      const r = await this._hass.callWS({ type: 'frontend/get_user_data', key });
-      v = r && r.value;
-    } catch (e) { /* bỏ qua, thử localStorage */ }
-    if (!v) {
-      try { v = JSON.parse(localStorage.getItem(key)); } catch (e) { /* bỏ qua */ }
-    }
-    return this._sanitizeLayout(v, vert);
-  }
+  async _readLayout(vert) { return this._sanitizeLayout(await this._readKey(this._key('layout', vert)), vert); }
 
+  // Nạp bố cục / độ lệch / auto / switch lõi đã lưu. Chỉ chạy lại khi layout_id hoặc title đổi (xem setConfig).
   async _loadLayout() {
     if (this._layoutLoaded || !this._hass || !this._config) return;
     this._layoutLoaded = true;
+    const sig = this._layoutSig;
     const [h, v, a, oh, ov, co] = await Promise.all([
-      this._readLayout(false), this._readLayout(true), this._readKey(this._autoKey()),
-      this._readOff(false), this._readOff(true), this._readKey(this._coreKey()),
+      this._readLayout(false), this._readLayout(true), this._readKey(this._key('auto')),
+      this._readOff(false), this._readOff(true), this._readKey(this._key('core')),
     ]);
+    if (sig !== this._layoutSig) return;   // card đã đổi layout_id / title trong lúc nạp → bỏ kết quả cũ
     if (h) this._layout = h;
     if (v) this._layoutV = v;
     if (oh) this._swOff = oh;
     if (ov) this._swOffV = ov;
     if (co && co.open) this._coreOpen = true;
-    if (a && typeof a === 'object' && a.on) { this._autoOn = true; this._autoStart(); }
+    if (a && typeof a === 'object' && a.on) { this._autoOn = true; this._autoSeeded = false; this._autoStart(); }
   }
 
   async _readKey(key) {
@@ -1152,16 +1425,11 @@ class SnmpTopoLanCard extends LitBase {
     if (this._hass) this._hass.callWS({ type: 'frontend/set_user_data', key, value }).catch(() => {});
   }
 
-  // ── Tự động xoay AP ──
-  _autoKey() {
-    const c = this._config;
-    return `${CARD_TAG}:auto:${c.layout_id || c.title || 'default'}`;
-  }
-
+  // ── Tự động xoay switch ──
   _toggleAuto() {
     this._autoOn = !this._autoOn;
-    this._writeKey(this._autoKey(), { on: this._autoOn });
-    if (this._autoOn) { this._autoPausedUntil = 0; this._autoAdvance(); this._autoStart(); }
+    this._writeKey(this._key('auto'), { on: this._autoOn });
+    if (this._autoOn) { this._autoPausedUntil = 0; this._autoSeeded = true; this._autoAdvance(); this._autoStart(); }
     else this._autoStop();
   }
 
@@ -1183,7 +1451,7 @@ class SnmpTopoLanCard extends LitBase {
     this._autoStart();
   }
 
-  // Mở nhóm AP kế tiếp: 'single' = 1 AP/lần, 'multi' = nhiều AP/lần (không vượt client_columns)
+  // Mở nhóm switch kế tiếp: 'single' = 1 switch/lần, 'multi' = nhiều switch/lần (không vượt client_columns)
   _autoAdvance() {
     const t = this._tree, A = this._config && this._config.auto;
     if (!t || !A || String(this._q || '').trim()) return; // đang tìm kiếm → giữ nguyên
@@ -1203,13 +1471,7 @@ class SnmpTopoLanCard extends LitBase {
     }
   }
 
-  _saveLayout() {
-    const key = this._layoutKey(this._vertical()), value = this._lay();
-    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* bỏ qua */ }
-    if (this._hass) {
-      this._hass.callWS({ type: 'frontend/set_user_data', key, value }).catch(() => {});
-    }
-  }
+  _saveLayout() { this._writeKey(this._key('layout', this._vertical()), this._lay()); }
 
   _toggleEdit() { this._edit = !this._edit; }
 
@@ -1221,16 +1483,11 @@ class SnmpTopoLanCard extends LitBase {
   }
 
   // ── Độ lệch vị trí của switch (so với vị trí tự động theo cây) ──
-  _coreKey() {
-    const c = this._config;
-    return `${CARD_TAG}:core:${c.layout_id || c.title || 'default'}`;
-  }
-
   // Cột của switch lõi nằm NGOÀI luồng (absolute trong .hub) nên không đẩy / bị đẩy bởi cột của các switch khác.
   // Vị trí mặc định bám theo node lõi: chế độ ngang → bên trái, dưới hàng hub (không đè ISP / pfSense);
   // chế độ dọc → bên phải node. Khi người dùng kéo thì cột được ghim (xem _pin) và không dùng vị trí mặc định này nữa.
   _coreColStyle() {
-    const L = this._lay().ctrl;
+    const L = this._hubPos('ctrl');
     return this._vertical()
       ? `left:calc(50% + ${L.dx + HUB_NW / 2 + 24}px);top:${L.y - this._geom.minY}px`
       : `left:${Math.max(0, L.x - this._geom.minX - COL_NW - 24)}px;top:calc(50% + ${L.dy + 56}px)`;
@@ -1281,11 +1538,6 @@ class SnmpTopoLanCard extends LitBase {
 
   _off() { return this._vertical() ? this._swOffV : this._swOff; }
 
-  _offKey(vert) {
-    const c = this._config;
-    return `${CARD_TAG}:swoff${vert ? '_v' : ''}:${c.layout_id || c.title || 'default'}`;
-  }
-
   _sanitizeOff(v) {
     if (!v || typeof v !== 'object') return null;
     const out = {};
@@ -1297,9 +1549,9 @@ class SnmpTopoLanCard extends LitBase {
     return out;
   }
 
-  async _readOff(vert) { return this._sanitizeOff(await this._readKey(this._offKey(vert))); }
+  async _readOff(vert) { return this._sanitizeOff(await this._readKey(this._key('swoff', vert))); }
 
-  _saveOff() { this._writeKey(this._offKey(this._vertical()), this._off()); }
+  _saveOff() { this._writeKey(this._key('swoff', this._vertical()), this._off()); }
 
   _swStyle(id) {
     const d = this._drag;
@@ -1311,14 +1563,13 @@ class SnmpTopoLanCard extends LitBase {
   // để node không nhảy khi kéo; vùng kéo thả thật là lớp .canvas phủ toàn bộ .tree.
   _hubGeom(t) {
     const ids = ['isp', 'pf', 'ctrl'].filter((k) => t[k]);
-    const L = this._lay();
     if (this._vertical()) {
-      const ys = ids.map((k) => L[k].y);
+      const ys = ids.map((k) => this._hubPos(k).y);
       const minY = this._edit ? 0 : Math.min(...ys);
       const maxY = Math.max(...ys);
       return { minX: 0, minY, w: 0, h: maxY - minY + NODE_H_V };
     }
-    const xs = ids.map((k) => L[k].x);
+    const xs = ids.map((k) => this._hubPos(k).x);
     const minX = this._edit ? 0 : Math.min(...xs);
     const maxX = Math.max(...xs);
     return { minX, minY: 0, w: maxX - minX + HUB_NW, h: 0 };
@@ -1327,7 +1578,7 @@ class SnmpTopoLanCard extends LitBase {
   _hubStyle(id) {
     const d = this._drag;
     const live = d && d.id === id;
-    const p = this._lay()[id];
+    const p = this._hubPos(id);
     if (this._vertical()) {
       const dx = live ? d.a : p.dx;
       const y = live ? d.b : p.y - this._geom.minY;
@@ -1361,7 +1612,7 @@ class SnmpTopoLanCard extends LitBase {
     if (pinCol) {                       // cột: toạ độ hiện tại trong .tree (kể cả cột đang xếp tự động)
       a0 = (nr.left - tr.left) / z; b0 = (nr.top - tr.top) / z;
     } else if (hubNode) {
-      const p = this._lay()[id];
+      const p = this._hubPos(id);
       a0 = vert ? p.dx : p.x; b0 = vert ? p.y : p.dy;
     } else {
       const p = this._off()[id] || { dx: 0, dy: 0 };
@@ -1371,9 +1622,12 @@ class SnmpTopoLanCard extends LitBase {
     let moved = false;
     node.setPointerCapture(e.pointerId);
     node.classList.add('dragging');
-    const move = (ev) => {
-      const da = clamp((ev.clientX - sx) / z, lim.l, lim.r);
-      const db = clamp((ev.clientY - sy) / z, lim.t, lim.b);
+    let px = sx, py = sy, raf = 0;
+    // Gộp pointermove: tối đa một lần cập nhật vị trí mỗi frame
+    const step = () => {
+      raf = 0;
+      const da = clamp((px - sx) / z, lim.l, lim.r);
+      const db = clamp((py - sy) / z, lim.t, lim.b);
       if (!moved && Math.hypot(da, db) < 3) return; // chạm nhẹ vẫn là click, không phải kéo
       moved = true;
       const a = a0 + da, b = b0 + db;
@@ -1384,7 +1638,9 @@ class SnmpTopoLanCard extends LitBase {
       this._drag = { id, a, b };
       this._scheduleDraw(); // đường nối bám theo node khi đang kéo
     };
+    const move = (ev) => { px = ev.clientX; py = ev.clientY; if (!raf) raf = requestAnimationFrame(step); };
     const up = () => {
+      if (raf) { cancelAnimationFrame(raf); step(); }   // áp nốt vị trí cuối trước khi lưu
       node.removeEventListener('pointermove', move);
       node.removeEventListener('pointerup', up);
       node.removeEventListener('pointercancel', up);
@@ -1417,35 +1673,8 @@ class SnmpTopoLanCard extends LitBase {
     node.addEventListener('pointercancel', up);
   }
 
-  connectedCallback() {
-    super.connectedCallback();
-    if (this.hasUpdated) this.requestUpdate(); // gắn lại ResizeObserver sau khi bị tháo
-    if (this._io) this._io.observe(this);
-    if (this._autoOn) this._autoStart();
-  }
-
-  firstUpdated() {
-    this._ro = new ResizeObserver(() => { this._applyZoom(); this._scheduleDraw(); });
-    // Card ngoài màn hình → thuộc tính `paused` trên host, CSS dừng toàn bộ animation
-    this._io = new IntersectionObserver((es) => this.toggleAttribute('paused', !es[es.length - 1].isIntersecting));
-    this._io.observe(this);
-  }
-
-  updated() {
-    const tree = this.renderRoot.querySelector('.tree');
-    const sc = this.renderRoot.querySelector('.scroll');
-    if (this._ro && (tree !== this._obsEl || sc !== this._obsSc)) {
-      this._ro.disconnect();
-      if (tree) this._ro.observe(tree);
-      if (sc) this._ro.observe(sc);
-      this._obsEl = tree;
-      this._obsSc = sc;
-    }
-    this._applyZoom();
-    this._scheduleDraw();
-  }
-
-  // ── Đường nối (SVG): ISP→pfSense→Controller→AP→client ──
+  // ═══ [5/6] HIỂN THỊ ═══
+  // ── Đường nối (SVG): ISP→pfSense→switch lõi→switch→cổng ──
   // Đo vị trí thật của node trong DOM rồi nối bằng đường cong mềm. Lớp SVG nằm DƯỚI node
   // nên đường có thể chạy xuyên qua node khác mà không che. Path chỉ tạo khi cần, các lần
   // sau chỉ cập nhật thuộc tính nên hạt chạy không bị giật.
@@ -1511,6 +1740,9 @@ class SnmpTopoLanCard extends LitBase {
       want.push({ id, from, to, bps, cls, status, label, side });
     if (t.isp && t.pf) {
       link('wan', 'isp', 'pf', (t.wan.down || 0) + (t.wan.up || 0), '', t.wan.status, [t.wan.down, t.wan.up]);
+    }
+    if (t.isp && !t.pf) {   // không có pfSense: ISP nối thẳng switch lõi
+      link('wan', 'isp', 'ctrl', (t.wan.down || 0) + (t.wan.up || 0), '', t.wan.status, [t.wan.down, t.wan.up]);
     }
     if (t.pf) {
       link('lan', 'pf', 'ctrl', (t.lan.down || 0) + (t.lan.up || 0), '', t.lan.status, [t.lan.down, t.lan.up]);
@@ -1614,7 +1846,7 @@ class SnmpTopoLanCard extends LitBase {
     const logoFail = () => { this._badLogos.add(n.logo); this.requestUpdate(); };
     const coreOn = n.apId === 'core' && this._coreOpen;
     const movable = n.hub || n.depth > 0;   // hub và switch kéo được; node cổng thiết bị thì không
-    return html`<div class="node ${n.status} ${si >= 0 ? `sel sel${si}` : coreOn ? 'sel selcore' : ''} ${n.hub ? 'hubnode' : ''} ${this._lvClass(n)}"
+    return html`<div class="node ${n.status} ${si >= 0 ? `sel sel${si}` : coreOn ? 'sel selcore' : ''} ${n.hub ? 'hubnode' : ''} ${n.lost ? 'lost' : ''} ${this._lvClass(n)}"
         data-nid=${n.id}
         style=${n.hub ? this._hubStyle(n.id) : movable ? this._swStyle(n.id) : ''}
         @click=${() => this._tap(n)}
@@ -1626,6 +1858,7 @@ class SnmpTopoLanCard extends LitBase {
       <div class="txt">
         <div class="name" title=${n.tip ? `${n.label}\n${n.tip}` : n.label}>${n.label}</div>
         ${subs.map((s) => html`<div class="sub">${s}</div>`)}
+        ${n.warn ? html`<div class="sub warn" title=${n.tip || n.warn} @click=${(e) => this._warnTap(e, n)}>${n.warn}</div>` : ''}
         ${n.down != null
           ? html`<div class="rate"><span class="d">↓ ${fmtRate(n.down)}</span> <span class="u">↑ ${fmtRate(n.up)}</span></div>`
           : ''}
@@ -1655,13 +1888,13 @@ class SnmpTopoLanCard extends LitBase {
         const i = this.renderRoot.querySelector('.sq');
         if (i) i.focus();
       });
-    } else if (this._q) { this._q = ''; this._tick(); }
+    } else if (this._q) { this._q = ''; this._tick(true); }
   }
 
-  // Gõ tìm kiếm: lọc client trong mọi AP, tự mở các AP có kết quả (tối đa client_columns AP)
+  // Gõ tìm kiếm: lọc cổng trong mọi switch, tự mở các switch có kết quả (tối đa client_columns switch)
   _onSearch(e) {
     this._q = e.target.value;
-    this._tick();
+    this._tick(true);
     if (this._q.trim() && this._tree) {
       this._selected = this._tree.aps.filter((a) => a.apId && a.kids.length)
         .slice(0, this._config.client_columns).map((a) => a.apId);
@@ -1728,7 +1961,7 @@ class SnmpTopoLanCard extends LitBase {
           <div class="zb ${this._searchOpen ? 'on' : ''}" role="button" title="Tìm thiết bị" @click=${() => this._toggleSearch()}><ha-icon icon="mdi:magnify"></ha-icon></div>
           <div class="zb" role="button" title="Toàn màn hình" @click=${() => this._toggleFs()}><ha-icon icon="mdi:fullscreen"></ha-icon></div>
           ${canEdit && this._edit ? html`<div class="zb" role="button" title="Đặt lại vị trí mặc định" @click=${() => this._resetLayout()}><ha-icon icon="mdi:restore"></ha-icon></div>` : ''}
-          <div class="zb ${this._autoOn ? 'on' : ''}" role="button" title=${this._autoOn ? 'Tắt tự động xoay AP' : 'Bật tự động xoay AP'} @click=${() => this._toggleAuto()}><ha-icon icon="mdi:autorenew"></ha-icon></div>
+          <div class="zb ${this._autoOn ? 'on' : ''}" role="button" title=${this._autoOn ? 'Tắt tự động xoay switch' : 'Bật tự động xoay switch'} @click=${() => this._toggleAuto()}><ha-icon icon="mdi:autorenew"></ha-icon></div>
           ${canEdit ? html`<div class="zb ${this._edit ? 'on' : ''}" role="button" title="Sắp xếp ISP / pfSense / các switch (kéo thả)" @click=${() => this._toggleEdit()}><ha-icon icon=${this._edit ? 'mdi:check' : 'mdi:cursor-move'}></ha-icon></div>` : ''}
           ${c.show_zoom ? html`
             <div class="zb" role="button" title="Thu nhỏ" @click=${() => this._setZoom(this._zoom - 0.1)}><ha-icon icon="mdi:magnify-minus-outline"></ha-icon></div>
@@ -1779,7 +2012,7 @@ class SnmpTopoLanCard extends LitBase {
               ? this._colBlock(a, a.apId, `c${i} abs pinned`, this._pinStyle(this._pin(a.apId))) : '')}
           </div>
         </div>
-        ${t.found ? '' : html`<div class="msg">Chưa thấy switch nào từ integration SNMP Switch Manager. Kiểm tra integration và tên switch trong cấu hình.</div>`}
+        ${t.found ? '' : html`<div class="msg">Chưa thấy switch nào từ integration (${this._platforms().join(', ')}). Kiểm tra integration, tùy chọn platform và tên switch trong cấu hình.</div>`}
       </div>`;
     }
     const fixed = this._fixedHeight();
@@ -1792,10 +2025,6 @@ class SnmpTopoLanCard extends LitBase {
   static get styles() {
     return css`
       :host { display: block; height: 100%; }
-      ha-card { padding: 12px 8px 12px 12px; overflow: hidden; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; }
-      .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 10px; }
-      .title { font-size: var(--ha-card-header-font-size, 20px); color: var(--primary-text-color); }
-      .zoom { display: flex; align-items: center; gap: 2px; color: var(--secondary-text-color); }
       .zb { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; cursor: pointer; }
       .zb:hover { background: var(--secondary-background-color); }
       .zb.on { background: var(--primary-color); color: var(--text-primary-color, #fff); }
@@ -1811,12 +2040,12 @@ class SnmpTopoLanCard extends LitBase {
       .zwrap { position: relative; }
       .msg { padding: 12px 4px; color: var(--secondary-text-color); font-size: 13px; }
 
-      /* Màu theo cột: đường nối, tiêu đề cột và viền AP đang chọn dùng cùng màu */
+      /* Màu theo cột: đường nối, tiêu đề cột và viền switch đang chọn dùng cùng màu */
       .c0, .sel0 { --col: var(--primary-color); }
       .c1, .sel1 { --col: var(--utwc-c1-color, #43a047); }
       .c2, .sel2 { --col: var(--utwc-warn); }
 
-      /* Bố cục: [hub 3 node tự do + cột AP cố định] + [các cột client, mỗi cột căn giữa] */
+      /* Bố cục: [hub 3 node tự do + cột switch cố định] + [các cột cổng, mỗi cột căn giữa] */
       .tree { position: relative; display: flex; align-items: flex-start; width: max-content; transform-origin: 0 0; isolation: isolate; }
       .apzone { display: flex; flex: none; }
       .hub { position: relative; flex: none; align-self: stretch; min-height: 90px; }
@@ -1832,8 +2061,7 @@ class SnmpTopoLanCard extends LitBase {
       .kid { padding: 3px 0; }
       .cols { align-self: stretch; display: flex; align-items: center; }
       .ccol { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 6px; margin-left: 96px; padding-right: 4px; }
-      .ccol .node { width: 230px; max-width: none; padding: 4px 10px; }
-      .chead { font-size: 12px; font-weight: 600; color: var(--col, var(--primary-text-color)); padding: 0 2px 2px; }
+      .ccol .node { width: 230px; max-width: none; padding: 6px 12px; }
       .ccol .more { padding-left: 4px; }
 
       svg.links { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 0; }
@@ -1850,15 +2078,6 @@ class SnmpTopoLanCard extends LitBase {
       @keyframes dash { to { stroke-dashoffset: -12; } }
       @media (prefers-reduced-motion: reduce) { svg.links path { animation: none; } }
 
-      .node {
-        position: relative; z-index: 1;
-        display: flex; align-items: center; gap: 8px; box-sizing: border-box;
-        min-width: 120px; max-width: 230px; padding: 6px 10px; cursor: pointer;
-        color: var(--primary-text-color);
-        background: var(--secondary-background-color);
-        border-radius: var(--ha-card-border-radius, 12px);
-        border-left: 4px solid var(--disabled-text-color);
-      }
       .node.hubnode { position: absolute; max-width: none; transform: translateY(-50%); }
       .tree.editing .hubnode, .tree.editing .kid > .node {
         cursor: grab; touch-action: none; user-select: none; outline: 1px dashed var(--primary-color);
@@ -1869,10 +2088,9 @@ class SnmpTopoLanCard extends LitBase {
       .tree.editing .ccol.dragging .chead { cursor: grabbing; }
       .node.ok { border-left-color: var(--utwc-ok); }
       .node.bad { border-left-color: var(--utwc-bad); }
-      .node.sel { outline: 2px solid var(--col, var(--primary-color)); outline-offset: -2px; }
       .node ha-icon { --mdc-icon-size: 22px; color: var(--secondary-text-color); flex: none; }
       .node .tg { --mdc-icon-size: 18px; margin-left: auto; }
-      .node .logo { width: 30px; height: 30px; object-fit: contain; flex: none; }
+      .node .logo { width: 24px; height: 24px; object-fit: contain; flex: none; }
       .kids > .kid > .node { width: 210px; max-width: none; }
       .txt { min-width: 0; }
       .name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1894,20 +2112,21 @@ class SnmpTopoLanCard extends LitBase {
         --utwc-warn: var(--warning-color, #ffa600);
         --utwc-down: var(--info-color, #039be5);
         --utwc-up: var(--utwc-up-color, #8e5be8);
-        padding: 14px;
+        padding: 14px; overflow: hidden; box-sizing: border-box; height: 100%;
+        display: flex; flex-direction: column; container-type: inline-size;
       }
       ha-card.s-glass { border: 1px solid var(--utwc-edge); }
       ha-card:fullscreen { height: 100% !important; border-radius: 0; padding: 20px; background: var(--primary-background-color) !important; }
 
       .head {
-        display: flex; flex-wrap: nowrap; align-items: center; gap: 8px 14px; padding: 8px 12px; margin: 0 0 12px;
+        display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 8px 14px; padding: 8px 12px; margin: 0 0 12px;
         border-radius: 16px; border: 1px solid var(--utwc-edge); background: var(--utwc-glass); box-shadow: var(--utwc-lift);
       }
       .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
       .logo-c { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; flex: none;
         color: var(--primary-color); background: color-mix(in srgb, var(--primary-color) 14%, transparent); }
       .logo-c ha-icon { --mdc-icon-size: 22px; }
-      .title { font-size: 17px; font-weight: 700; line-height: 1.15; white-space: nowrap; }
+      .title { font-size: 17px; font-weight: 700; line-height: 1.15; white-space: nowrap; color: var(--primary-text-color); }
       .subtitle { font-size: 11px; color: var(--secondary-text-color); white-space: nowrap; }
       .stats { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; justify-content: center; min-width: 0; }
       .tile { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 12px; white-space: nowrap;
@@ -1937,13 +2156,38 @@ class SnmpTopoLanCard extends LitBase {
         border: 1px solid var(--utwc-edge); background: var(--input-fill-color, rgba(0, 0, 0, 0.04)); color: var(--primary-text-color); font: inherit; font-size: 12px; }
 
       /* Card hẹp thì tự ẩn bớt chi tiết để header luôn nằm gọn một hàng */
-      ha-card { container-type: inline-size; }
       @container (max-width: 980px) { .spark { display: none; } .tile.speed .tl { display: none; } }
       @container (max-width: 780px) { .subtitle, .tl { display: none; } .tile { padding: 5px 8px; } .tv { font-size: 14px; } }
-      @container (max-width: 560px) { .head { flex-wrap: wrap; } }
+      /* Điện thoại: header xếp 3 hàng (tên → ô thống kê → nút công cụ), mọi thứ co theo bề rộng card, không tràn ngang */
+      @container (max-width: 560px) {
+        .head { flex-wrap: wrap; padding: 8px 10px; gap: 8px; margin-bottom: 8px; }
+        .brand { flex: 1 1 100%; }
+        .title { overflow: hidden; text-overflow: ellipsis; }
+        .stats { flex: 1 1 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 6px; justify-content: stretch; }
+        .tile { min-width: 0; padding: 4px 8px; gap: 6px; }
+        .tile > div:not(.ti) { min-width: 0; }
+        .tv { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+        .tile.speed { grid-column: 1 / -1; }
+        .tile.speed .tv { font-size: 12px; white-space: normal; }
+        .ti { width: 24px; height: 24px; }
+        .right { flex: 1 1 100%; margin-left: 0; }
+        .tools { flex: 1 1 100%; flex-wrap: wrap; justify-content: center; row-gap: 2px; }
+        .sq { flex: 1 1 100%; width: auto; min-width: 0; margin: 0 0 4px; }
+      }
+      @media (max-width: 600px) { ha-card { padding: 8px; } }   /* ha-card là container nên không tự dùng container query cho chính nó */
+      @container (max-width: 400px) {
+        .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }   /* 2 cột đủ rộng cho "188.7 Mbps"; ô cổng và ô speedtest chiếm cả hàng */
+        .tile:has(.ti.on) { grid-column: 1 / -1; }
+        .ti.on::after { width: 7px; height: 7px; }
+        .tv { font-size: 12px; }
+        .tm { font-size: 10px; }
+      }
 
       .node {
-        gap: 10px; padding: 8px 12px; border-radius: 14px;
+        position: relative; z-index: 1;
+        display: flex; align-items: center; gap: 10px; box-sizing: border-box;
+        min-width: 120px; max-width: 230px; padding: 8px 12px; cursor: pointer;
+        color: var(--primary-text-color); border-radius: 14px;
         border: 1px solid var(--utwc-edge); border-left: 4px solid var(--disabled-text-color);
         /* Lớp nền đặc phía dưới lớp kính (độ đặc chỉnh bằng node_opacity) để đường flow không lộ xuyên qua chữ */
         background: var(--utwc-glass),
@@ -1953,12 +2197,10 @@ class SnmpTopoLanCard extends LitBase {
       }
       .node:hover { filter: brightness(1.04); box-shadow: 0 1px 0 color-mix(in srgb, #fff 55%, transparent) inset, 0 14px 28px -10px rgba(0, 0, 0, 0.35), 0 3px 8px rgba(0, 0, 0, 0.1); }
       ha-card.nblur .node { backdrop-filter: blur(var(--utwc-nblur, 4px)); -webkit-backdrop-filter: blur(var(--utwc-nblur, 4px)); }
-      .ccol .node { padding: 6px 12px; }
       .ico { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%;
         background: color-mix(in srgb, var(--primary-text-color, #000) 7%, transparent);
         box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 0 color-mix(in srgb, #fff 40%, transparent); }
       .ccol .ico { width: 32px; height: 32px; }
-      .ico .logo { width: 24px; height: 24px; }
       .stdot { position: absolute; top: 9px; right: 11px; width: 8px; height: 8px; border-radius: 50%; background: var(--disabled-text-color);
         box-shadow: 0 0 0 2px color-mix(in srgb, var(--card-background-color, #fff) 80%, transparent); }
       .node.ok .stdot { background: var(--utwc-ok); }
@@ -1972,7 +2214,12 @@ class SnmpTopoLanCard extends LitBase {
         box-shadow: 0 0 0 1px color-mix(in srgb, var(--col, var(--primary-color)) 55%, transparent),
           0 10px 22px -8px color-mix(in srgb, var(--col, var(--primary-color)) 45%, transparent);
       }
-      .chead { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; padding: 0 2px 4px; }
+      /* Mất kết nối (unavailable): viền + chấm đỏ; dòng cảnh báo bấm được để mở more-info của entity bị mất */
+      .node.sel.bad { border-left-color: var(--utwc-bad); }
+      .node.lost { border-color: color-mix(in srgb, var(--utwc-bad) 60%, transparent); }
+      .sub.warn { color: var(--utwc-bad); font-weight: 500; cursor: pointer; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+      .sub.warn:hover { text-decoration: underline; }
+      .chead { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; padding: 0 2px 4px; color: var(--col, var(--primary-text-color)); }
       .chead ha-icon { --mdc-icon-size: 18px; color: var(--col, var(--secondary-text-color)); }
 
       /* ═══ Giao diện neon (palette lấy từ server-monitor-card) ═══
@@ -2011,7 +2258,7 @@ class SnmpTopoLanCard extends LitBase {
       ha-card.transp { background: transparent; --utwc-halo: var(--primary-background-color, #fff); }
       ha-card.blur { backdrop-filter: blur(var(--utwc-blur, 6px)); -webkit-backdrop-filter: blur(var(--utwc-blur, 6px)); }
 
-      /* Auto xoay AP: đổi tên animation mỗi lần đổi AP để hiệu ứng mờ dần chạy lại */
+      /* Auto xoay switch: đổi tên animation mỗi lần đổi switch để hiệu ứng mờ dần chạy lại */
       .cols.fa { animation: cfade-a 0.5s ease; }
       .cols.fb { animation: cfade-b 0.5s ease; }
       @keyframes cfade-a { from { opacity: 0; } to { opacity: 1; } }
@@ -2064,7 +2311,7 @@ class SnmpTopoLanCard extends LitBase {
       /* Chế độ ngang: .cnodes trong suốt để cột client giữ nguyên bố cục cũ */
       .tree.h .cnodes { display: contents; }
 
-      /* Chế độ dọc: hub → hàng AP → hàng client; mỗi cấp đúng 1 hàng (không xuống dòng)
+      /* Chế độ dọc: hub → hàng switch → hàng cổng; mỗi cấp đúng 1 hàng (không xuống dòng)
          để đường nối từ trên xuống không chồng chéo */
       .tree.v { flex-direction: column; align-items: stretch; }
       .tree.v .apzone { flex-direction: column; }
@@ -2088,7 +2335,7 @@ class SnmpTopoLanCard extends LitBase {
   }
 }
 
-// ───────────────────────── Visual editor ─────────────────────────
+// ═══ [6/6] VISUAL EDITOR & ĐĂNG KÝ CARD ═══
 // Dựng theo khuôn editor của sysdesk: các nhóm đóng/mở, slider, nút chọn, entity picker.
 const EDITOR_TAG = `${CARD_TAG}-editor`;
 const KEEP_EMPTY = ['isp', 'pfsense']; // node chỉ hiện khi có khai báo → giữ object rỗng khi đã bật
@@ -2096,7 +2343,6 @@ const KEEP_EMPTY = ['isp', 'pfsense']; // node chỉ hiện khi có khai báo �
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
 ));
-const getPath = (o, p) => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o);
 
 // Gán giá trị theo đường dẫn "a.b.c" (không sửa object gốc); giá trị rỗng → xoá key, dọn object cha rỗng
 const setPath = (obj, path, value) => {
@@ -2141,6 +2387,8 @@ const EDITOR_SECTIONS = [
   { id: 'general', title: '⚙️ Chung', fields: [
     { k: 'title', t: 'text', label: 'Tiêu đề card', ph: 'Mạng LAN' },
     { k: 'subtitle', t: 'text', label: 'Phụ đề dưới tiêu đề', ph: 'LAN Topology' },
+    { k: 'platform', t: 'csv', label: 'Integration nguồn dữ liệu (platform)', ph: 'snmp_switch_manager',
+      hint: 'Mặc định snmp_switch_manager. Có thể điền integration khác (nhiều thì cách nhau bằng dấu phẩy) nếu nó xuất entity đúng định dạng, xem README.' },
     { k: 'orientation', t: 'choice', label: 'Hướng sơ đồ', def: 'horizontal',
       opts: [['horizontal', '↔ Ngang'], ['vertical', '↕ Dọc']],
       hint: 'Dọc: mỗi cấp switch là một hàng ngang, đường flow chạy từ trên xuống.' },
@@ -2191,16 +2439,16 @@ const EDITOR_SECTIONS = [
     { k: 'wheel_zoom', t: 'choice', label: 'Cuộn chuột để zoom', def: 'ctrl',
       opts: [['ctrl', 'Giữ Ctrl'], ['always', 'Luôn bật']] },
   ] },
-  { id: 'auto', title: '🔁 Tự động xoay AP', fields: [
+  { id: 'auto', title: '🔁 Tự động xoay switch', fields: [
     { k: 'auto.mode', t: 'choice', label: 'Cách xoay', def: 'single',
-      opts: [['single', '1 AP mỗi lần'], ['multi', 'Nhiều AP một lần']],
+      opts: [['single', '1 switch mỗi lần'], ['multi', 'Nhiều switch một lần']],
       hint: 'Bật/tắt bằng nút ↻ trên đầu card (cạnh nút ✥). Trạng thái được nhớ theo từng người dùng.' },
-    { k: 'auto.count', t: 'choice', num: true, label: 'Số AP mỗi lần (khi chọn "Nhiều AP một lần")', def: 2,
+    { k: 'auto.count', t: 'choice', num: true, label: 'Số switch mỗi lần (khi chọn "Nhiều switch một lần")', def: 2,
       opts: [[1, '1'], [2, '2'], [3, '3']],
-      hint: 'Không vượt quá "Số AP mở cùng lúc" ở nhóm Chung.' },
+      hint: 'Không vượt quá "Số switch mở cùng lúc" ở nhóm Chung. Switch lõi không tham gia xoay.' },
     { k: 'auto.interval', t: 'range', label: 'Đổi sau mỗi', min: 2, max: 60, step: 1, def: 6, fmt: (v) => `${v} giây` },
-    { k: 'auto.skip_empty', t: 'bool', label: 'Bỏ qua AP không có client', def: true },
-    { k: 'auto.pause_on_tap', t: 'range', label: 'Tạm dừng khi bạn tự bấm chọn AP', min: 0, max: 120, step: 5, def: 20,
+    { k: 'auto.skip_empty', t: 'bool', label: 'Bỏ qua switch không có thiết bị', def: true },
+    { k: 'auto.pause_on_tap', t: 'range', label: 'Tạm dừng khi bạn tự bấm chọn switch', min: 0, max: 120, step: 5, def: 20,
       fmt: (v) => (v === 0 ? 'Không dừng' : `${v} giây`),
       hint: 'Hết thời gian này auto tự chạy tiếp.' },
   ] },
@@ -2219,8 +2467,8 @@ const EDITOR_SECTIONS = [
   ] },
   { id: 'isp', title: '🌐 Nhà mạng (ISP)', toggle: 'isp', toggleLabel: 'Hiện node ISP',
     toggleHint: 'Node chỉ xuất hiện khi được bật ở đây.', fields: [
-    { k: 'isp.name', t: 'text', label: 'Tên hiển thị', ph: 'Viettel' },
-    { k: 'isp.logo', t: 'text', label: 'Logo (đường dẫn ảnh)', ph: '/local/logo/viettel.png' },
+    { k: 'isp.name', t: 'text', label: 'Tên hiển thị', ph: 'ISP' },
+    { k: 'isp.logo', t: 'text', label: 'Logo (đường dẫn ảnh)', ph: '/local/logo/isp.png' },
     { k: 'isp.status', t: 'entity', label: 'Entity trạng thái' },
     { k: 'isp.ip', t: 'text', label: 'IP WAN (entity hoặc IP cố định)', ph: 'sensor.wan_public_ip',
       hint: 'Hiện ở dòng 2 của node ISP. Nhập entity_id (ví dụ sensor.wan_public_ip) hoặc một IP ghi cố định.' },
@@ -2228,9 +2476,9 @@ const EDITOR_SECTIONS = [
     { k: 'isp.loss', t: 'entity', label: 'Entity mất gói (%) — hiện khi rê chuột vào node' },
   ] },
   { id: 'pfsense', title: '🛡️ pfSense', toggle: 'pfsense', toggleLabel: 'Hiện node pfSense',
-    toggleHint: 'Node chỉ xuất hiện khi được bật ở đây.', fields: [
+    toggleHint: 'Tắt node này thì ISP nối thẳng vào switch lõi.', fields: [
     { k: 'pfsense.name', t: 'text', label: 'Tên hiển thị', ph: 'pfSense' },
-    { k: 'pfsense.ip', t: 'text', label: 'IP (entity hoặc IP cố định)', ph: '192.168.1.x',
+    { k: 'pfsense.ip', t: 'text', label: 'IP (entity hoặc IP cố định)', ph: '192.0.2.1',
       hint: 'Hiện ở dòng 2 của node pfSense. Bỏ trống thì không hiện dòng 2.' },
     { k: 'pfsense.logo', t: 'text', label: 'Logo (đường dẫn ảnh)', ph: '/local/logo/pfsense.png' },
     { k: 'pfsense.cpu', t: 'entity', label: 'Entity CPU (%) — hiện khi rê chuột vào node' },
@@ -2238,23 +2486,23 @@ const EDITOR_SECTIONS = [
     { k: 'pfsense.states', t: 'entity', label: 'Entity số state — hiện khi rê chuột vào node' },
   ] },
   { id: 'core', title: '🖧 Switch lõi', fields: [
-    { k: 'core.switch', t: 'text', label: 'Tên switch lõi (đúng tên thiết bị trong HA)', ph: 'SW-CORE',
-      hint: 'Tên thiết bị trong integration SNMP Switch Manager. Không phân biệt hoa thường, có thể bỏ đuôi .home.lan.' },
-    { k: 'core.name', t: 'text', label: 'Tên hiển thị', ph: 'SW-CORE' },
-    { k: 'core.ip', t: 'text', label: 'IP (chỉ để hiển thị)', ph: '192.168.1.x' },
+    { k: 'core.switch', t: 'text', label: 'Tên switch lõi (đúng tên thiết bị trong HA)', ph: 'CORE-SW',
+      hint: 'Tên thiết bị trong integration nguồn (mặc định SNMP Switch Manager). Không phân biệt hoa thường, có thể bỏ đuôi .example.lan.' },
+    { k: 'core.name', t: 'text', label: 'Tên hiển thị', ph: 'CORE-SW' },
+    { k: 'core.ip', t: 'text', label: 'IP (chỉ để hiển thị)', ph: '192.0.2.2' },
     { k: 'core.logo', t: 'text', label: 'Logo (đường dẫn ảnh)', ph: '/local/logo/switch.png' },
-    { k: 'core.ports', t: 'csv', label: 'Cổng nối lên pfSense (cách nhau bằng dấu phẩy)', ph: 'Gi1/0/15, Gi1/0/16',
-      hint: 'Nối LACP nhiều cổng thì khai báo hết, tốc độ được cộng lại. Các cổng này không hiện như thiết bị.' },
+    { k: 'core.ports', t: 'csv', label: 'Cổng nối lên pfSense / ISP (cách nhau bằng dấu phẩy)', ph: 'Gi1/0/15, Gi1/0/16',
+      hint: 'Nối LACP nhiều cổng thì khai báo hết, tốc độ được cộng lại. Các cổng này không hiện như thiết bị. Không có pfSense thì tốc độ này dùng cho đường ISP → switch lõi (khi chưa khai báo wan).' },
   ] },
   { id: 'links', title: '🔗 Đường nối giữa các switch', fields: [
     { k: 'links', t: 'objlist', label: 'Danh sách đường nối (switch cha → switch con)', addLabel: 'Thêm đường nối',
       title: (it) => `${it.parent || '?'} → ${it.child || '?'}`,
       cols: [
-        { k: 'parent', label: 'Switch cha', ph: 'SW-CORE' },
+        { k: 'parent', label: 'Switch cha', ph: 'CORE-SW' },
         { k: 'parent_port', label: 'Cổng bên switch cha', ph: 'Gi1/0/13' },
-        { k: 'child', label: 'Switch con', ph: 'CISCO_SW#3' },
+        { k: 'child', label: 'Switch con', ph: 'ACCESS-SW-1' },
         { k: 'child_port', label: 'Cổng bên switch con', ph: 'Gi1/0/2' },
-        { k: 'child_ip', label: 'IP switch con (chỉ để hiển thị)', ph: '192.168.1.x' },
+        { k: 'child_ip', label: 'IP switch con (chỉ để hiển thị)', ph: '192.0.2.253' },
         { k: 'down', t: 'entity', label: 'Sensor tải xuống (chỉ khi switch không có trong integration)' },
         { k: 'up', t: 'entity', label: 'Sensor tải lên (như trên)' },
         { k: 'status', t: 'entity', label: 'Sensor trạng thái link (như trên, 1 = up, 2 = down)' },
@@ -2265,12 +2513,12 @@ const EDITOR_SECTIONS = [
     { k: 'switches', t: 'objlist', label: 'Switch không có trong integration (dùng sensor YAML)', addLabel: 'Thêm switch',
       title: (it) => it.name || '?',
       cols: [
-        { k: 'name', label: 'Tên', ph: 'SG2210P-1' },
-        { k: 'model', label: 'Model', ph: 'SG2210P' },
-        { k: 'ip', label: 'IP (chỉ để hiển thị)', ph: '192.168.1.x' },
-        { k: 'logo', label: 'Logo (đường dẫn ảnh)', ph: '/local/logo/tplink.png' },
+        { k: 'name', label: 'Tên', ph: 'ACCESS-SW-2' },
+        { k: 'model', label: 'Model', ph: 'Model-X' },
+        { k: 'ip', label: 'IP (chỉ để hiển thị)', ph: '192.0.2.251' },
+        { k: 'logo', label: 'Logo (đường dẫn ảnh)', ph: '/local/logo/switch.png' },
       ],
-      hint: 'Switch thêm tay chỉ xuất hiện trên sơ đồ khi có đường nối ở nhóm trên.' },
+      hint: 'Switch thêm tay chỉ xuất hiện trên sơ đồ khi có đường nối ở nhóm trên. Muốn bấm vào để xem thiết bị ở từng cổng thì khai báo thêm `ports` (rx / tx / status của từng cổng) trong YAML, xem README.' },
   ] },
   { id: 'wan', title: '📶 Đường WAN', fields: [
     { k: 'wan.down', t: 'entities', label: 'WAN tải xuống (có thể nhiều entity, sẽ cộng lại)',
@@ -2282,10 +2530,10 @@ const EDITOR_SECTIONS = [
     { k: 'speedtest.ping', t: 'entity', label: 'Speedtest ping (ms)' },
   ] },
   { id: 'ports', title: '🔌 Cổng & tên thiết bị', fields: [
-    { k: 'port_names', t: 'kv', label: 'Đặt tên / IP cho cổng', ph: 'SW-CORE:Gi1/0/6 = Frigate | 192.168.1.x',
-      hint: 'Mỗi dòng: switch:cổng = tên | IP (phần IP có thể bỏ). Cổng có mô tả trên switch dạng FRIGATE-192.168.1.x thì card tự lấy tên và IP, không cần khai báo ở đây.' },
+    { k: 'port_names', t: 'kv', label: 'Đặt tên / IP cho cổng', ph: 'CORE-SW:Gi1/0/6 = Camera | 192.0.2.4',
+      hint: 'Mỗi dòng: switch:cổng = tên | IP (phần IP có thể bỏ). Cổng có mô tả trên switch dạng CAMERA-192.0.2.4 thì card tự lấy tên và IP, không cần khai báo ở đây.' },
     { k: 'exclude_switches', t: 'csv', label: 'Ẩn các switch (cách nhau bằng dấu phẩy)', ph: 'SW-Test' },
-    { k: 'exclude_ports', t: 'csv', label: 'Ẩn các cổng (cách nhau bằng dấu phẩy)', ph: 'SW-CORE:Gi1/0/8, Gi1/0/24',
+    { k: 'exclude_ports', t: 'csv', label: 'Ẩn các cổng (cách nhau bằng dấu phẩy)', ph: 'CORE-SW:Gi1/0/8, Gi1/0/24',
       hint: 'Dạng switch:cổng, hoặc chỉ tên cổng để ẩn trên mọi switch.' },
     { k: 'switch_logo', t: 'text', label: 'Logo chung cho mọi switch', ph: '/local/logo/switch.png' },
   ] },
@@ -2416,6 +2664,19 @@ class SnmpTopoLanCardEditor extends HTMLElement {
     else if (f.t === 'csv') v = el.value.split(',').map((s) => s.trim()).filter(Boolean);
     else if (f.t === 'kv') v = parseKv(el.value);
     else v = el.value.trim();
+    // Cặp warn / crit (hệ số và sàn Mbps): kéo vế này vượt vế kia thì kéo theo vế kia, luôn giữ crit ≥ warn
+    // (nếu không setConfig sẽ ném lỗi và card báo "crit phải lớn hơn hoặc bằng warn")
+    const pair = f.t === 'range' && Number.isFinite(v) && /^(alerts\.(?:factor_|floors\.[a-z]+\.))(warn|crit)$/.exec(f.k);
+    if (pair) {
+      const isWarn = pair[2] === 'warn', other = pair[1] + (isWarn ? 'crit' : 'warn');
+      const cur = getPath(this._config, other), o = cur != null ? cur : FIELD_BY_KEY[other].def;
+      if (isWarn ? v > o : v < o) {
+        this._config = setPath(this._config, other, v);
+        this._commit(f.k, v);
+        this._render();   // vẽ lại để slider kia nhảy theo
+        return;
+      }
+    }
     this._commit(f.k, v);
   }
 
@@ -2563,7 +2824,7 @@ class SnmpTopoLanCardEditor extends HTMLElement {
         <a class="coffee" href="https://www.paypal.com/paypalme/doanlong1412" target="_blank" rel="noopener">☕ Mời mình ly cà phê</a>
       </div>
       ${EDITOR_SECTIONS.map((s) => this._sectionHtml(s)).join('')}
-      <div class="tip">💡 Mẹo: bấm nút ✥ trên card để kéo thả ISP / pfSense / các switch; vị trí được lưu riêng cho chế độ ngang và chế độ dọc. Đặt mô tả cổng trên switch dạng <code>FRIGATE-192.168.1.x</code> để card tự hiện tên và IP của thiết bị.</div>`;
+      <div class="tip">💡 Mẹo: bấm nút ✥ trên card để kéo thả ISP / pfSense / các switch; vị trí được lưu riêng cho chế độ ngang và chế độ dọc. Đặt mô tả cổng trên switch dạng <code>CAMERA-192.0.2.4</code> để card tự hiện tên và IP của thiết bị.</div>`;
     this._bindPickers();
     this._syncPickers();
   }
@@ -2597,11 +2858,11 @@ class SnmpTopoLanCardEditor extends HTMLElement {
   }
 }
 
-customElements.define(CARD_TAG, SnmpTopoLanCard);
+if (!customElements.get(CARD_TAG)) customElements.define(CARD_TAG, SnmpTopoLanCard);
 if (!customElements.get(EDITOR_TAG)) customElements.define(EDITOR_TAG, SnmpTopoLanCardEditor);
 
 window.customCards = window.customCards || [];
-window.customCards.push({
+if (!window.customCards.some((c) => c.type === CARD_TAG)) window.customCards.push({
   type: CARD_TAG,
   name: 'SNMP Topo LAN',
   description: 'Topo LAN ISP → pfSense → switch lõi → switch → cổng với tốc độ realtime (SNMP Switch Manager)',

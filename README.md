@@ -1,7 +1,7 @@
 # 🌐 SNMP Topo LAN Card
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-![version](https://img.shields.io/badge/version-1.0.0-blue)
+![version](https://img.shields.io/badge/version-1.0.1-blue)
 ![HA](https://img.shields.io/badge/Home%20Assistant-2024.6+-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -9,7 +9,7 @@
 
 Card tùy chỉnh cho Home Assistant Lovelace vẽ toàn bộ mạng LAN thành sơ đồ cây trực tiếp: **ISP → pfSense → switch lõi → các switch khác → cổng có thiết bị**. Đường flow chuyển động có tốc độ và độ dày theo băng thông thật, bố cục kéo thả, cảnh báo lưu lượng và trình chỉnh sửa giao diện trực quan.
 
-Dữ liệu lấy từ integration **SNMP Switch Manager**. Với switch yếu không chạy được qua integration, bạn dùng sensor SNMP bằng YAML. **Không cần plugin giao diện bổ sung, cấu hình hoàn toàn qua trình chỉnh sửa tích hợp.**
+Dữ liệu lấy từ integration **SNMP Switch Manager** (mặc định) hoặc từ bất kỳ integration nào xuất entity đúng định dạng (xem **Nguồn dữ liệu**). pfSense là tùy chọn, switch không có SNMP khai báo tay được cổng. Với switch yếu không chạy được qua integration, dùng sensor SNMP bằng YAML. **Không cần plugin giao diện bổ sung, cấu hình hoàn toàn qua trình chỉnh sửa tích hợp.**
 
 > 📌 **Quy ước trong tài liệu:** địa chỉ IP ghi chung là `192.168.1.x` (thay `x` bằng IP thật của thiết bị). Chuỗi community ghi là `<COMMUNITY>` và chỉ lưu trong `secrets.yaml`. Tên switch trong ví dụ: `SW-CORE`, `Switch1-251`, `Switch2-252`, `SF220`.
 
@@ -25,7 +25,7 @@ Dữ liệu lấy từ integration **SNMP Switch Manager**. Với switch yếu k
 
 ---
 
-## ✨ Tính năng (v1.0.0)
+## ✨ Tính năng (v1.0.1)
 
 ### 🎨 Hiển thị & giao diện
 - 🌳 **Sơ đồ cây** ISP → pfSense → switch lõi → switch con → cổng có thiết bị, vẽ ngang (`horizontal`) hoặc dọc (`vertical`)
@@ -55,6 +55,15 @@ Dữ liệu lấy từ integration **SNMP Switch Manager**. Với switch yếu k
 - 🟡🔴 **Glow vàng/đỏ** khi lưu lượng vượt cả mức sàn của tầng **và** trung bình hôm qua nhân hệ số
 - 🛡️ **Không báo ảo**: thiết bị nhỏ chỉ sáng khi vượt mức sàn, hết lưu lượng lớn là tắt ngay
 
+### 🆕 Mới trong v1.0.1
+- 🔌 **`platform`**: chọn integration nguồn dữ liệu (chuỗi hoặc danh sách); integration khác chỉ cần xuất entity đúng "hợp đồng"
+- 🌐 **Bỏ được pfSense**: ISP nối thẳng vào switch lõi; `isp.enabled` / `pfsense.enabled: false` tắt node mà vẫn giữ cấu hình
+- 🧱 **Switch khai báo tay có cổng** (`switches[].ports`): bấm vào switch mở được danh sách thiết bị như switch SNMP
+- ⚠️ **Cảnh báo mất kết nối**: viền và chấm đỏ kèm dòng "⚠ mất kết nối", bấm để mở more-info của entity bị mất
+- ⚡ **Nhẹ hơn**: chỉ dựng lại sơ đồ khi entity liên quan đổi; card ngoài màn hình hoặc tab ẩn cập nhật 5 giây/lần
+- 📱 **Header gọn trên điện thoại** (3 hàng khi card hẹp hơn 560px) và **zoom nhớ theo từng thiết bị**
+- 🐞 Sửa lỗi: option để trống không còn đè mặc định, tự xoay không chọn lại ngay khi bạn vừa đóng switch, mất baseline cả ngày, bố cục nạp thừa, registry lỗi bị hoãn 10 phút… (xem **Lịch sử thay đổi**)
+
 ### 🎛️ Trình chỉnh sửa trực quan
 Entity picker cho ISP/WAN/pfSense/Speedtest, trình soạn đường nối, thanh trượt độ đặc/độ mờ/zoom/chiều cao/ngưỡng cảnh báo, các phần accordion.
 
@@ -65,7 +74,7 @@ Entity picker cho ISP/WAN/pfSense/Speedtest, trình soạn đường nối, than
 | | |
 |---|---|
 | Home Assistant | 2024.6+ |
-| Integration | **[SNMP Switch Manager](https://github.com/OtisPresley/snmp-switch-manager)** (qua HACS), đã bật **Bandwidth Collection**. Switch yếu có thể thay bằng sensor YAML |
+| Integration | **[SNMP Switch Manager](https://github.com/OtisPresley/snmp-switch-manager)** (qua HACS), đã bật **Bandwidth Collection**. Từ v1.0.1 có thể dùng integration khác qua `platform` (xem **Nguồn dữ liệu**). Switch yếu có thể thay bằng sensor YAML |
 | Tài khoản | **Administrator**, vì card đọc registry thiết bị và entity |
 | pfSense | Tùy chọn: trạng thái ISP, tốc độ WAN, CPU/RAM/state |
 | Speedtest.net | Tùy chọn: ô Speedtest ở header |
@@ -91,7 +100,7 @@ Entity picker cho ISP/WAN/pfSense/Speedtest, trình soạn đường nối, than
 2. Chép vào `/config/www/community/snmp-topo-lan-card/snmp-topo-lan-card.js`.
 3. **Settings → Dashboards → Resources → Add resource**:
    ```
-   URL:  /local/community/snmp-topo-lan-card/snmp-topo-lan-card.js?v=1.0.0
+   URL:  /local/community/snmp-topo-lan-card/snmp-topo-lan-card.js?v=1.0.1
    Type: JavaScript module
    ```
 4. Hard-reload trình duyệt. Đổi số sau `?v=` mỗi khi thay file để tránh cache.
@@ -241,7 +250,7 @@ for sw, host in (("swpoe1", "192.168.1.x"), ("swpoe2", "192.168.1.x")):
 - Mỗi switch bị hỏi khoảng 24 truy vấn nhỏ mỗi 30 đến 60 giây. Nếu `snmpwalk` hoặc trang web của switch bị chậm, tăng `scan_interval` lên 60.
 - Sensor YAML tính **byte/s**, sensor của integration tính **bit/s**. Card tự quy đổi đơn vị khi bạn khai báo `down`/`up` trong `links`.
 - Nếu bản HA của bạn không nhận platform `derivative` trong YAML, tạo sensor tương ứng bằng Helper kiểu Derivative với cùng nguồn và cửa sổ thời gian.
-- Với switch khai báo thủ công, card chỉ đọc cổng **uplink** (xem **Switch thêm tay** ở phần ví dụ). Sensor cổng 1 đến 8 dùng cho dashboard hoặc lịch sử riêng.
+- Với switch khai báo thủ công, từ v1.0.1 bạn khai báo từng cổng bằng `switches[].ports` để bấm vào switch mở được danh sách thiết bị (xem **Switch khai báo tay và cổng của nó**). Các sensor `*_in_rate` / `*_out_rate` ở trên dùng trực tiếp được cho `rx` / `tx` (đơn vị `B/s` được hỗ trợ). Sensor trạng thái SNMP trả `1` (up) hoặc `2` (down), card không coi `2` là mất link nên với cổng cần chính xác hãy tạo template sensor đổi `2` thành `down`, hoặc bỏ `status` để card suy ra từ lưu lượng.
 
 ---
 
@@ -277,6 +286,8 @@ Bấm **✏️ Edit** để mở Config Editor:
 |---|---|
 | **Bấm vào switch** | Mở cột các cổng có thiết bị, bấm lần nữa để đóng |
 | **Bấm vào switch lõi** | Mở cột riêng, không tính vào số switch mở cùng lúc |
+| **Bấm dòng ⚠ mất kết nối** | Mở more-info của entity bị mất (kể cả trên node switch) |
+| **Bấm node ISP / pfSense** | Mở more-info (entity bị mất nếu có, không thì entity chính) |
 | **Nút ✥** | Vào chế độ sắp xếp, kéo mọi node tới bất kỳ đâu |
 | **Kéo tiêu đề cột** | Ghim cột cổng tại chỗ thả (📌); bấm đúp để bỏ ghim |
 | **Nút ✓ / ↺** | Lưu bố cục / đặt lại mặc định |
@@ -289,6 +300,123 @@ Bấm **✏️ Edit** để mở Config Editor:
 > **Quy ước chiều:** `↓` là dữ liệu đi từ pfSense/switch lõi **xuống** thiết bị, `↑` là chiều ngược lại. Thấy mũi tên ngược thì đặt `swap_rx_tx: true`.
 
 ---
+
+## 🔗 Nguồn dữ liệu: `platform` và "hợp đồng" entity
+
+```yaml
+platform: snmp_switch_manager   # mặc định; nhận một chuỗi hoặc một danh sách
+# platform: [snmp_switch_manager, my_rest_integration]
+```
+
+Card đọc **entity registry** và chỉ lấy entity có `platform` nằm trong danh sách này. Các entity cùng một **device** được coi là **một switch**. Integration khác (REST cho MikroTik/UniFi, template…) chỉ cần xuất entity đúng định dạng dưới đây, không cần bật SNMP trên thiết bị. Đổi `platform` thì card nạp lại registry.
+
+**1. Mỗi cổng: một entity `switch.*`** với các thuộc tính:
+
+| Thuộc tính | Bắt buộc | Ý nghĩa |
+|---|---|---|
+| `Index` | có | số nguyên, khóa của cổng; dùng để ghép với sensor qua `if_index` |
+| `Name` | nên có | tên cổng (`Gi1/0/1`, `ether2`); dùng cho `core.ports`, `links`, `port_names`, `exclude_ports` |
+| `Oper` | nên có | `up` hoặc `down`. Thiếu thì card suy ra từ lưu lượng |
+| `Alias` | không | mô tả cổng; dạng `TÊN-192.168.1.x` thì card tách tên và IP |
+| `Speed` | không | chuỗi tốc độ link, chỉ hiện khi rê chuột |
+| `Port Type` | không | `physical` hoặc để trống thì hiện; giá trị khác (`lag`, `vlan`…) bị ẩn |
+
+Tên thuộc tính chấp nhận cả dạng viết thường và gạch dưới (`Port Type`, `port type`, `port_type`).
+
+**2. Mỗi cổng, mỗi chiều: một entity `sensor.*` tốc độ:**
+
+| Thuộc tính | Ý nghĩa |
+|---|---|
+| `direction` | `rx` hoặc `tx` (hoặc entity_id kết thúc bằng `_rx_throughput` / `_tx_throughput`) |
+| `kind` | `throughput` (hoặc entity_id kết thúc bằng `_throughput`) |
+| `if_index` | trùng `Index` của cổng |
+| `unit_of_measurement` | một trong `bit/s`, `kbit/s`, `Mbit/s`, `Gbit/s`, `B/s`, `kB/s`, `KiB/s`, `MB/s`, `MiB/s`, `GB/s` |
+
+Giá trị âm (counter reset) được coi là 0. Sensor không có đơn vị trong danh sách trên thì không tính vào tốc độ và baseline.
+
+**3. Tên switch** là `name_by_user` (hoặc `name`) của device. Phần sau dấu chấm bị bỏ khi so khớp, nên `CORE-SW` khớp với device `core-sw.example.lan`. Tên này dùng trong `core.switch`, `links[].parent/child`, `port_names`…
+
+## 🧭 Không có pfSense: ISP nối thẳng switch lõi
+
+Bỏ khối `pfsense` thì ISP nối thẳng vào switch lõi. Tốc độ đường ISP → switch lõi lấy từ `wan` nếu có, không thì từ tổng các cổng `core.ports`. Ví dụ router MikroTik làm switch lõi, modem cắm vào `ether1`/`ether2`:
+
+```yaml
+type: custom:snmp-topo-lan-card
+title: Mạng LAN
+platform: snmp_switch_manager
+isp:
+  name: Nhà mạng
+  status: binary_sensor.wan_status     # tùy chọn
+core:
+  switch: CCR2004
+  ports: [ether1, ether2]              # cổng nối lên modem; tốc độ được cộng lại và không hiện như thiết bị
+links:
+  - { parent: CCR2004, parent_port: sfp-sfpplus1, child: CRS310, child_port: sfp1 }
+```
+
+Muốn tắt tạm một node mà vẫn giữ cấu hình: `isp: { enabled: false, ... }` hoặc `pfsense: { enabled: false, ... }`.
+
+## 🧱 Switch khai báo tay và cổng của nó
+
+Switch không có trong integration nguồn (ví dụ Netgear Plus qua [ha-netgear-plus](https://github.com/ckarrie/ha-netgear-plus), hoặc SG2210P đọc bằng sensor YAML ở Phần **Khi integration lỗi**) khai báo trong `switches` và nối vào cây bằng `links`. Thêm `ports` thì bấm vào switch sẽ mở danh sách thiết bị như switch SNMP:
+
+```yaml
+links:
+  - { parent: SW-CORE, parent_port: Gi1/0/9, child: SG2210P-1, child_port: 9 }   # cổng 9 là uplink, không hiện như thiết bị
+switches:
+  - name: SG2210P-1
+    model: SG2210P
+    ports:
+      - { port: 1, name: "Camera 1", ip: 192.168.1.x, rx: sensor.swpoe1_p1_in_rate, tx: sensor.swpoe1_p1_out_rate, status: sensor.swpoe1_p1_status }
+      - { port: 2, name: "AP phòng khách", rx: sensor.swpoe1_p2_in_rate, tx: sensor.swpoe1_p2_out_rate }
+      - { port: 9, name: "Uplink", rx: sensor.swpoe1_sfp1_in_rate, tx: sensor.swpoe1_sfp1_out_rate }
+```
+
+*(entity_id chỉ là ví dụ, thay bằng entity thật của bạn)*
+
+| Khóa | Bắt buộc | Ý nghĩa |
+|---|---|---|
+| `port` | có | số hoặc tên cổng (`1`, `ether2`); dùng để khớp với `child_port` / `exclude_ports` |
+| `name` | không | tên thiết bị hiện trên node |
+| `ip` | không | IP hiện ở dòng 2 |
+| `icon` | không | icon `mdi:` riêng |
+| `rx`, `tx` | không | **một** sensor tốc độ mỗi chiều; đổi đơn vị tự động theo `unit_of_measurement` (xem bảng đơn vị ở trên) |
+| `status` | không | entity trạng thái link: `on`/`up`/`1`/`true`/`connected`/`online` là có link, `off`/`down`/`0`/`false`/`disconnected`/`offline` là mất link. Không có hoặc giá trị khác thì card coi cổng là up khi có lưu lượng |
+
+Chiều ↓ ↑ giống các switch khác (↓ là hướng đi xuống thiết bị, `rx` là dữ liệu từ thiết bị vào switch). Thấy ngược thì bật `swap_rx_tx: true`. Nếu mọi entity cổng của switch này đều `unavailable` thì node báo "⚠ mất kết nối".
+
+## ⚠️ Cảnh báo mất kết nối
+
+Entity `unavailable` (hoặc không còn trong HA) làm node đổi viền và chấm sang đỏ, kèm dòng "⚠ mất kết nối: tên entity +N". `unknown` được coi là bình thường (hay gặp lúc HA mới khởi động).
+
+| Node | Entity được theo dõi |
+|---|---|
+| ISP | `status`, `delay`, `loss` và sensor WAN (hoặc sensor cổng `core.ports` khi không có pfSense) |
+| pfSense | `cpu`, `ram`, `states` |
+| Switch lõi | sensor và trạng thái cổng nối lên pfSense/ISP |
+| Switch con | sensor và trạng thái đường nối `links`; với switch khai báo tay có `ports`, báo khi **mọi** entity cổng đều mất |
+
+- Bấm node ISP hoặc pfSense để mở more-info của entity bị mất (không có entity mất thì mở entity chính).
+- Với switch, bấm vào node chỉ mở/đóng danh sách cổng, nên **dòng cảnh báo** bấm riêng được để mở more-info.
+- Entity có lại thì cảnh báo tự tắt.
+
+## ⚡ Hiệu năng và điện thoại
+
+- Card so sánh trạng thái các entity liên quan và **bỏ qua việc dựng sơ đồ khi không có gì đổi**; entity không liên quan không gây dựng lại.
+- Card ngoài màn hình hoặc tab ẩn **cập nhật 5 giây/lần** (hằng số `SLOW_TICK_MS`) và cập nhật ngay khi hiện lại.
+- Zoom bằng con lăn và kéo node được gộp thành một lần xử lý mỗi frame; icon được cache theo tên.
+- Đồ thị nhỏ ở header tự vẽ lại khi dữ liệu đổi, và tự ẩn khi card hẹp hơn 980px.
+- Registry nạp lỗi thì thử lại sau **30 giây** (trước đây 10 phút).
+- **Header trên điện thoại:** khi card hẹp hơn 560px, header xếp ba hàng (logo và tên; các ô thống kê tự co; nút công cụ tự xuống dòng và căn giữa, ô tìm kiếm khi mở chiếm cả hàng). Dưới 400px các ô thống kê xếp 2 cột, ô "Cổng đang up" và ô Speedtest chiếm cả hàng. Màn hình dưới 600px giảm lề ngoài của card từ 14px xuống 8px. Phần này mới thử trên header mô phỏng, hãy kiểm tra trên điện thoại thật.
+
+## 🔍 Zoom nhớ theo từng thiết bị
+
+Mức zoom lưu trong `localStorage` của trình duyệt trên **từng máy**, không đồng bộ qua HA: điện thoại và máy tính mỗi nơi nhớ một mức, tải lại trang vẫn giữ.
+
+- **Khi nào lưu:** mỗi lần bấm `+`, `−`, bấm vào số `%` để về 100%, bấm "vừa khung" hoặc dùng con lăn.
+- **Thứ tự ưu tiên:** lần đầu mở card, có mức đã lưu thì dùng; chưa có thì lấy `zoom` trong YAML; không có nữa thì 100%.
+- **Khi bạn đổi `zoom` trong config hoặc editor:** mức mới được dùng ngay và mức đã lưu trên máy bị xóa. Sửa các option khác thì zoom đang dùng được giữ nguyên.
+- **Nhiều card:** mỗi `layout_id` (hoặc `title` nếu không có `layout_id`) có mức zoom lưu riêng.
 
 ## 🏷️ Đặt tên và map tên
 
@@ -349,6 +477,7 @@ exclude_ports: ["SW-CORE:Gi1/0/8", "Gi1/0/24"]   # "Gi1/0/24" đứng một mìn
 |---|---|---|---|
 | `title` | string | — | Tiêu đề card |
 | `subtitle` | string | `LAN Topology` | Dòng phụ |
+| `platform` | string / list | `snmp_switch_manager` | Integration nguồn dữ liệu switch (xem **Nguồn dữ liệu**) |
 | `orientation` | string | `horizontal` | `horizontal` hoặc `vertical` |
 | `height` | number / `auto` | `auto` | Chiều cao (px, 100–2000); cố định thì sơ đồ cuộn bên trong |
 | `client_columns` | number | `2` | Số switch mở cùng lúc (1–3), không tính switch lõi |
@@ -369,9 +498,11 @@ exclude_ports: ["SW-CORE:Gi1/0/8", "Gi1/0/24"]   # "Gi1/0/24" đứng một mìn
 | `node_opacity` | number | `80` | Độ đặc node (%), tăng để flow không lộ xuyên chữ |
 | `active_threshold_bps` | number | `2000` | Đường nối dưới ngưỡng này đứng yên |
 | `hide_scrollbar` | boolean | `true` | Ẩn thanh cuộn (con lăn/cảm ứng vẫn cuộn) |
-| `show_zoom` / `zoom` / `wheel_zoom` | bool / number / string | `true` / `1` / `ctrl` | Nút zoom, mức ban đầu 0.3–1.6, `ctrl` hoặc `always` |
+| `show_zoom` / `zoom` / `wheel_zoom` | bool / number / string | `true` / `1` / `ctrl` | Nút zoom, mức ban đầu 0.3–1.6 (mức đã lưu trên thiết bị được ưu tiên, xem **Zoom nhớ theo từng thiết bị**), `ctrl` hoặc `always` |
 | `switch_logo` | string | — | Logo chung cho mọi switch |
 | `exclude_switches`, `exclude_ports`, `port_names`, `links`, `switches` | list / map | rỗng | Xem các phần tương ứng |
+
+> **Option để trống** trong YAML (ví dụ `max_ports:`) không còn đè giá trị mặc định; áp dụng cả cho `alerts`, `floors` và `auto`. Cặp `warn`/`crit` (và `factor_warn`/`factor_crit`) phải thỏa `crit ≥ warn`, nếu không card báo lỗi cấu hình; trong editor, kéo vế này vượt vế kia thì vế còn lại tự đi theo.
 
 ### `core`: switch lõi *(bắt buộc)*
 
@@ -397,9 +528,10 @@ exclude_ports: ["SW-CORE:Gi1/0/8", "Gi1/0/24"]   # "Gi1/0/24" đứng một mìn
 | Khóa | Mô tả |
 |---|---|
 | `name` | Tên switch (dùng trong `links`) |
-| `model`, `ip`, `logo` | Model (hiện trong tooltip), IP (chỉ hiển thị), logo |
+| `model`, `ip`, `logo` | Model (tooltip), IP (chỉ hiển thị), logo |
+| `ports[]` | Cổng khai báo tay (`port`, `name`, `ip`, `icon`, `rx`, `tx`, `status`), xem **Switch khai báo tay và cổng của nó** |
 
-> Switch thêm tay chỉ hiện khi có mục trong `links` trỏ tới nó. Đừng khai báo ở đây nếu integration đã có switch đó, bạn sẽ thấy hai node.
+> Switch thêm tay chỉ hiện khi có mục trong `links` trỏ tới nó. Đừng khai báo ở đây nếu integration đã có switch đó, bạn sẽ thấy hai node. Không có `ports` thì chỉ đo được đường uplink (qua `down`/`up` trong `links`).
 
 ### `isp`, `pfsense`, `wan`, `speedtest`
 
@@ -413,6 +545,7 @@ exclude_ports: ["SW-CORE:Gi1/0/8", "Gi1/0/24"]   # "Gi1/0/24" đứng một mìn
 | `pfsense.cpu` / `ram` / `states` | CPU %, RAM %, số state, hiện trong tooltip |
 | `wan.down` / `wan.up` | Tốc độ WAN; nhiều entity (list) sẽ được cộng |
 | `speedtest.down` / `up` / `ping` | Kết quả Speedtest ở header; chỉ cần một entity là hiện ô |
+| `isp.enabled` / `pfsense.enabled` | `false` để tắt node mà vẫn giữ cấu hình (không có pfSense thì ISP nối thẳng vào switch lõi) |
 
 Đơn vị tốc độ hỗ trợ: `bit/s`, `kbit/s`, `Mbit/s`, `Gbit/s`, `B/s`, `kB/s`, `KiB/s`, `MB/s`, `MiB/s`, `GB/s`.
 
@@ -533,13 +666,14 @@ core:
 
 ### 🧱 Switch thêm tay, không dùng integration
 
-Dùng khi switch không đọc được bằng integration và bạn đã tạo sensor uplink bằng YAML (xem phần **Khi integration lỗi**):
+Dùng khi switch không đọc được bằng integration và bạn đã tạo sensor bằng YAML (xem phần **Khi integration lỗi**). Thêm `ports` để mở được danh sách thiết bị; chỉ khai uplink thì dùng `down` / `up` / `status` trong `links`:
 
 ```yaml
 links:
   - parent: SW-CORE
     parent_port: Gi1/0/9
     child: SG2210P-1
+    child_port: 9
     child_ip: 192.168.1.x
     down: sensor.swpoe1_sfp1_in_rate     # cha → con (IN của switch con)
     up: sensor.swpoe1_sfp1_out_rate      # con → cha (OUT của switch con)
@@ -548,6 +682,9 @@ switches:
   - name: SG2210P-1
     model: SG2210P
     ip: 192.168.1.x
+    ports:
+      - { port: 1, name: "Camera 1", ip: 192.168.1.x, rx: sensor.swpoe1_p1_in_rate, tx: sensor.swpoe1_p1_out_rate }
+      - { port: 2, name: "AP phòng khách", rx: sensor.swpoe1_p2_in_rate, tx: sensor.swpoe1_p2_out_rate }
 ```
 
 ---
@@ -572,6 +709,11 @@ switches:
 |---|---|
 | `snmpwalk` báo Timeout | Community chưa Apply/Save, SNMP tắt, hoặc ACL không cho IP của HA |
 | Integration báo lỗi sau khi đổi community | Sửa **SNMP Community Override**, hoặc xóa rồi thêm lại |
+| Node ISP/pfSense/switch đỏ kèm "⚠ mất kết nối" | Có entity `unavailable` hoặc đã bị xóa; bấm dòng cảnh báo để mở more-info, kiểm tra integration/thiết bị nguồn |
+| Dùng integration khác nhưng không thấy switch | Đặt đúng `platform`; entity phải có thuộc tính theo **hợp đồng entity** và thuộc cùng một device |
+| Cổng switch thêm tay luôn hiện up | `status` SNMP trả `2` không được coi là down: dùng template sensor đổi `2` thành `down`, hoặc bỏ `status` |
+| Đổi `zoom` trong YAML mà card không đổi | Mức zoom đã lưu trên máy được ưu tiên; đổi chính giá trị `zoom` (card xóa mức đã lưu), hoặc bấm số `%` để về 100% |
+| `max_ports:` để trống mà card lỗi | Từ v1.0.1 option để trống dùng giá trị mặc định; hãy cập nhật card và đổi `?v=` trong URL resource |
 | Switch yếu cứ timeout trong integration | Dùng sensor YAML và khai báo switch thêm tay |
 | Include rule không ra sensor | Value phải khớp tên ở Controls; thử Match **Contains** |
 | Throughput hiện `Unknown` | Chờ 1–2 phút, cần hai lần đọc |
@@ -590,6 +732,17 @@ switches:
 ---
 
 ## 📋 Lịch sử thay đổi
+
+### v1.0.1
+- 🔌 Thêm `platform` (chọn integration nguồn, chuỗi hoặc danh sách) và "hợp đồng" entity cho integration khác
+- 🌐 Không có pfSense thì ISP nối thẳng switch lõi (tốc độ lấy từ `wan` hoặc `core.ports`); thêm `isp.enabled` / `pfsense.enabled`
+- 🧱 Switch khai báo tay có `ports` (`rx`, `tx`, `status`) nên mở được danh sách thiết bị
+- ⚠️ Cảnh báo mất kết nối cho ISP, pfSense, switch lõi và các switch; bấm node hoặc dòng cảnh báo để mở more-info
+- ⚡ Chỉ dựng lại sơ đồ khi entity liên quan đổi; card ngoài màn hình hoặc tab ẩn cập nhật 5 giây/lần; zoom bằng con lăn và kéo node gộp theo frame; cache icon
+- 📱 Header gọn trên điện thoại (3 hàng dưới 560px, 2 cột ô thống kê dưới 400px), lề card giảm còn 8px dưới 600px
+- 🔍 Zoom lưu theo từng thiết bị và theo `layout_id`/`title`; đổi `zoom` trong config thì config thắng
+- 🐞 Sửa: option để trống không đè mặc định (cả `alerts`, `floors`, `auto`); tự xoay không chọn lại ngay khi đóng hết switch nên `pause_on_tap` có tác dụng; nạp file hai lần không làm card chết và `customCards` không nhân đôi; editor giữ `crit ≥ warn` khi kéo slider; sensor chưa có state không còn làm mất baseline cả ngày (thử lại sau 60 giây, bỏ qua giá trị `null` cũ trong localStorage); bố cục chỉ nạp lại khi `layout_id`/`title` đổi; sửa option trong editor không đặt lại zoom đang dùng; registry lỗi thử lại sau 30 giây thay vì 10 phút; sparkline vẽ lại khi dữ liệu đổi; nhãn editor còn chữ AP đã đổi thành switch
+- 🧹 Dọn code: bảng luật kiểm tra config (`RULES`), gộp hàm đọc/ghi layout, gộp CSS trùng, xóa hàm và biến thừa
 
 ### v1.0.0 — bản phát hành đầu tiên
 - 🌳 Sơ đồ cây ISP → pfSense → switch lõi → switch → cổng có thiết bị, vẽ ngang hoặc dọc, đường flow chuyển động theo băng thông thật
